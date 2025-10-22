@@ -22,7 +22,8 @@ System_Boundary(core_system, "WIS2 Downloader System") {
 }
 
 System(external_wis2_catalogue, "External WIS2 Global Catalogue", "API (HTTP/S)", "External system providing WIS2 catalogue metadata.")
-System(external_data_source, "External Data Source", "Internet (HTTP/S)", "Source of data files to be downloaded.")
+System(external_wis2_cache, "External WIS2 Global Cache", "Internet (HTTP/S)", "Source of (core) data files to be downloaded.")
+System(external_wis2_broker, "External WIS2 Global Broker", "Internet (MQTT/S)", "Publishes data (and metadata) notifications.")
 
 Rel(user, frontend_app, "Uses", "HTTP/S")
 
@@ -36,8 +37,11 @@ Rel(subscription_manager, redis, "Stores/Retrieves configuration and dispatches 
 Rel(subscription_manager, prometheus, "Exposes metrics to", "HTTP /metrics endpoint")
 Rel(subscription_manager, loki, "Sends logs to", "Docker Logging Driver")
 
+Rel(subscription_manager, external_wis2_broker, "Subscribes to WIS2 topics", "MQTT(S)")
+Rel(external_wis2_broker, subscription_manager, "Sends notifications on data availability", "MQTT(S)")
+
 Rel(celery_worker, redis, "Retrieves tasks and stores results", "Redis")
-Rel(celery_worker, external_data_source, "Downloads data from", "HTTP/S")
+Rel(celery_worker, external_wis2_cache, "Downloads data from", "HTTP/S")
 Rel(celery_worker, subscription_manager, "Writes Prometheus metrics to shared volume for", "Filesystem Mount")
 Rel(celery_worker, loki, "Sends logs to", "Docker Logging Driver")
 
