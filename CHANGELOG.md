@@ -129,11 +129,23 @@ def _reconnect(self):
 - Fixed credential logging security issue (was logging passwords)
 - Changed verbose log messages from WARNING to DEBUG
 
----
+### Phase 7: Documentation - COMPLETE
 
-## Pending Work
+**Added:**
+- Main project `README.adoc` with architecture overview
+- `docs/admin-guide.adoc` - Deployment, configuration, monitoring
+- `docs/user-guide.adoc` - Subscriptions, filtering, common use cases
+- `docs/api-reference.adoc` - REST API documentation
+- `docs/developer-guide.adoc` - Architecture, modules, extending
+- Module READMEs for shared, subscriber, subscription_manager, task_manager
+- Apache 2.0 license to all modules and main repo
 
-### Phase 7: Environment & Docker
-- [ ] Clean up unused config files (e.g., `config/redis-sentinel/sentinel.conf`)
-- [ ] Fix sentinel.conf file permissions
-- [ ] Update/create main project README
+**Updated:**
+- `openapi.yml` - Complete rewrite with filters, correct schemas, examples
+- Wildcard support for media type filtering (fnmatch)
+- Fixed WIS2 topic examples (correct centre-id format with ISO2C prefix)
+
+**Cleaned up:**
+- Removed duplicate `config/redis-sentinel/sentinel.conf`
+- Fixed sentinel.conf permissions
+- Fixed CRLF line endings
