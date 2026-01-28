@@ -24,7 +24,17 @@ class CommandListener(threading.Thread):
         self.channel = channel
         self.stop_event = threading.Event()
         LOGGER.info(f"Redis listener initialised for channel: {channel}")
-        
+
+    def _reconnect(self):
+        """Recreate pubsub and resubscribe after connection failure."""
+        try:
+            self.pubsub.close()
+        except Exception:
+            pass
+        self.pubsub = self.redis.pubsub(ignore_subscribe_messages=True)
+        self.pubsub.subscribe(self.channel)
+        LOGGER.info(f"Reconnected and resubscribed to channel: {self.channel}")
+
     def run(self):
         try:
             self.pubsub.subscribe(self.channel)
@@ -40,8 +50,12 @@ class CommandListener(threading.Thread):
                     self._process_command(message)
                 time.sleep(1)
             except redis.exceptions.ConnectionError as e:
-                LOGGER.error(f'Redis connection error {e}. Retrying in 5 seconds')
+                LOGGER.error(f'Redis connection error {e}. Reconnecting in 5 seconds')
                 time.sleep(5)
+                try:
+                    self._reconnect()
+                except Exception as reconnect_error:
+                    LOGGER.error(f'Reconnection failed: {reconnect_error}')
             except Exception as e:
                 LOGGER.error(f"Unexpected error {e} in CommandListener")
 
@@ -56,7 +70,8 @@ class CommandListener(threading.Thread):
                 return
 
             if action == 'subscribe':
-                self.subscriber.subscribe(topic, save_path)
+                filters = command.get('filters', {})
+                self.subscriber.subscribe(topic, save_path, filters)
                 LOGGER.info(f'Subscribed to new topic: {topic}, save path = {save_path}')
             elif action == 'unsubscribe':
                 self.subscriber.unsubscribe(topic)

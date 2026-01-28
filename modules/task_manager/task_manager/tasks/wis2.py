@@ -31,6 +31,7 @@ STATUS_PENDING = "PENDING"
 STATUS_VALID_CONDITIONS = [STATUS_SUCCESS, STATUS_FAILED, STATUS_SKIPPED, STATUS_PENDING]
 REDIS_TTL_SECONDS = int(os.getenv("REDIS_TTL_SECONDS", 3600))
 LOCK_EXPIRE = int(os.getenv("REDIS_MESSAGE_LOCK", 300))
+CACHE_EXCLUDE_LIST = os.getenv("GC_EXCLUDE","").split(",")
 
 _pool = urllib3.PoolManager()
 hash_module = importlib.import_module("hashlib")
@@ -40,6 +41,14 @@ TRACKER = "wis2:notifications:data:tracker"
 
 mimetypes.add_type('application/bufr', '.bufr')
 mimetypes.add_type('application/grib', '.grib')
+
+DEFAULT_ACCEPTED_MEDIA_TYPES = [
+                        'image/gif', 'image/jpeg', 'image/png', 'image/tiff',  # image formats
+                        'application/pdf', 'application/postscript',  # postscript and PDF
+                        'application/bufr', 'application/grib',  # WMO formats
+                        'application/x-hdf', 'application/x-hdf5', 'application/x-netcdf', 'application/x-netcdf4',  # scientific formats
+                        'text/plain', 'text/html', 'text/xml', 'text/csv', 'text/tab-separated-values',  # text based formats
+                        ]
 
 # define some metrics for prometheus
 
@@ -130,6 +139,11 @@ def guess_file_type(data):
                 mime = 'application/grib'
     ext = mimetypes.guess_extension(mime)
     return mime, ext
+
+def _is_allowed_media_type(media_type, filters):
+    allowed_types = filters.get('accepted_media_types', DEFAULT_ACCEPTED_MEDIA_TYPES)
+    base_type = media_type.split(';')[0].strip().lower()
+    return base_type in [t.lower() for t in allowed_types]
 
 
 def _select_download_link(links):
@@ -260,6 +274,7 @@ def download_from_wis2(self, job):
         'topic': None,
         'broker': None,
         'global_cache': None,
+        'centre_id': None,
         'metadata_id': None,
         'received': None,
         'queued': None,
@@ -375,7 +390,7 @@ def download_from_wis2(self, job):
         result['global_cache'] = urlsplit(download_url).hostname
 
         # ToDo, remove hard coding and move to config.
-        if result['global_cache'] in ("wis2.ncm.gov.sa"):
+        if result['global_cache'] in CACHE_EXCLUDE_LIST:
             result['status'] = STATUS_SKIPPED
             result['reason'] = "Global cache black listed, skipped"
             result['error_class'] = "GlobalCacheBlacklisted"
@@ -433,6 +448,14 @@ def download_from_wis2(self, job):
 
         file_type, _ = guess_file_type(data)
         result['media_type'] = file_type
+        # check if media_type is allowed
+        filters = job.get('filters', {})
+        if not _is_allowed_media_type(file_type, filters):
+            result['status'] = STATUS_SKIPPED
+            result['reason'] = f"Media type '{file_type}' not allowed by filter"
+            result['error_class'] = "MediaTypeNotAllowed"
+            LOGGER.warning(f"File {output_path} skipped, media type '{file_type}' not allowed by filter")
+            return result
 
         # hash verification
         hash_props = job['payload']['properties'].get('integrity',{})

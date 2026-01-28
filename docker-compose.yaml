@@ -54,6 +54,9 @@ services:
     command: ["redis-server", "--appendonly", "yes", "--protected-mode", "no"]
     volumes:
       - redis-primary-data:/data
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.10
     logging: *default-logging
 
   redis-replica-1:
@@ -62,11 +65,14 @@ services:
       context: ./containers/redis/
       dockerfile: Dockerfile
     restart: always
-    command: ["redis-server", "--replicaof", "redis-primary", "6379", "--protected-mode", "no"]
+    command: ["redis-server", "--replicaof", "172.28.0.10", "6379", "--protected-mode", "no"]
     depends_on:
       - redis-primary
     volumes:
       - redis-replica-1-data:/data
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.11
     logging: *default-logging
 
   redis-replica-2:
@@ -75,11 +81,14 @@ services:
       context: ./containers/redis/
       dockerfile: Dockerfile
     restart: always
-    command: ["redis-server", "--replicaof", "redis-primary", "6379", "--protected-mode", "no"]
+    command: ["redis-server", "--replicaof", "172.28.0.10", "6379", "--protected-mode", "no"]
     depends_on:
       - redis-primary
     volumes:
       - redis-replica-2-data:/data
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.12
     logging: *default-logging
 
   redis-sentinel-1:
@@ -95,6 +104,9 @@ services:
       - redis-primary
       - redis-replica-1
       - redis-replica-2
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.20
     logging: *default-logging
 
   redis-sentinel-2:
@@ -110,6 +122,9 @@ services:
       - redis-primary
       - redis-replica-1
       - redis-replica-2
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.21
     logging: *default-logging
 
   redis-sentinel-3:
@@ -125,6 +140,9 @@ services:
       - redis-primary
       - redis-replica-1
       - redis-replica-2
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.22
     logging: *default-logging
 
   # Task handling
@@ -145,6 +163,8 @@ services:
       - redis-sentinel-1
       - redis-sentinel-2
       - redis-sentinel-3
+    networks:
+      - redis-net
     logging: *default-logging
 
   # Main application
@@ -164,11 +184,15 @@ services:
     env_file: *default-env
     environment:
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_metrics
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5001
     tty: true
     depends_on:
-      - redis-primary
-      - redis-replica-1
-      - redis-replica-2
+      - redis-sentinel-1
+      - redis-sentinel-2
+      - redis-sentinel-3
+    networks:
+      - redis-net
     logging: *default-logging
 
 
@@ -189,6 +213,8 @@ services:
       - redis-sentinel-1
       - redis-sentinel-2
       - redis-sentinel-3
+    networks:
+      - redis-net
     logging: *default-logging
 
 
@@ -199,3 +225,10 @@ volumes:
   redis-primary-data:
   redis-replica-1-data:
   redis-replica-2-data:
+
+networks:
+  redis-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

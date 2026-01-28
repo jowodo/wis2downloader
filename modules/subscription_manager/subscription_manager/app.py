@@ -17,10 +17,6 @@ from redis.exceptions import ConnectionError
 # Import shared Redis client
 from shared import get_redis_client
 
-# Import config loader from package
-from . import load_config
-
-
 # set up logging
 log_formatter = logging.Formatter(
     fmt='%(asctime)s.%(msecs)03dZ, %(name)s, %(levelname)s, %(message)s',
@@ -44,6 +40,8 @@ LOGGER = logging.getLogger(__name__)
 DATA_DIRECTORY = Path(
     os.getenv("DATA_BASEPATH", "/data/wis2-downloads")).resolve()
 
+FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
+FLASK_PORT = int(os.getenv("FLASK_PORT", 5001))
 
 def get_json() -> dict:
     """Get JSON body safely."""
@@ -71,9 +69,6 @@ def normalise_path(userpath: str) -> str | None:
         return None
 
     return str(resolved_path.relative_to(DATA_DIRECTORY))
-
-# Load config
-CONFIG = load_config()
 
 # Redis pub/sub channel for subscription commands
 COMMAND_CHANNEL = "subscription_commands"
@@ -188,11 +183,14 @@ def add_subscription():
     # Get location (target) where we want to save the data for this topic
     target = normalise_path(data.get('target', ''))
 
+    # get filters specified
+    filters = data.get('filters', {})
+
     command = {
         "action": "subscribe",
         "topic": topic,
         "save_path": target,
-        "filters": []
+        "filters": filters
     }
 
     # Publish command to subscriber via Redis
@@ -318,5 +316,4 @@ def health_check():
 
 
 def run():
-    app.run(debug=True, host=CONFIG['flask_host'],
-            port=CONFIG['flask_port'], use_reloader=False)
+    app.run(debug=True, host=FLASK_HOST, port=FLASK_PORT, use_reloader=False)

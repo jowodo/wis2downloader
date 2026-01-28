@@ -83,11 +83,13 @@ class Subscriber():
     def _on_message(self, client, userdata, msg):
         LOGGER.debug(f"Message received on topic {msg.topic}")
         target = self.active_subscriptions.get(msg.topic,{}).get('target')
+        filters = self.active_subscriptions.get(msg.topic,{}).get('filters', {})
 
         if target is None:
             for key, value in self.active_subscriptions.items():
                 if fnmatch(msg.topic, value['pattern']):
-                    target = value['target']
+                    target = value.get('target')
+                    filters = value.get('filters', {})
                     break
 
         if target is None:
@@ -99,6 +101,7 @@ class Subscriber():
         job = {
             "topic": msg.topic,
             "target": target,
+            "filters": filters,
             "_broker": self.host,
             "_received": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             '_queued': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
@@ -113,11 +116,12 @@ class Subscriber():
         workflow = wis2_download(job)
         workflow.apply_async()
 
-    def subscribe(self, topic, target):
+    def subscribe(self, topic, target, filters):
         self.client.subscribe(topic, qos=0)
         self.active_subscriptions[topic] = {
             'target': target,
-            'pattern': topic.replace("+", "*").replace("#", "*")
+            'pattern': topic.replace("+", "*").replace("#", "*"),
+            'filters': filters
         }
         LOGGER.info(f"Subscribed to {topic} on {self.host}")
         return self.active_subscriptions

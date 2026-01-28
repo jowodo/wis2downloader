@@ -34,7 +34,7 @@ CELERY_BROKER_TRANSPORT_OPTIONS_STR = os.environ.get(
     '{"master_name": "redis-primary",'
     '"socket_connect_timeout": 1,'
     '"socket_timeout": 1,'
-    '"retry_on_timeout": True,'
+    '"retry_on_timeout": true,'
     '"retry_errors": ["BusyLoadingError"]}'
 )
 try:
