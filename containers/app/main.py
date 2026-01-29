@@ -196,10 +196,7 @@ def home_page():
             min_lat, max_lat = min(lats), max(lats)
             if isinstance(min_lon,list) or isinstance(max_lon,list) or isinstance(min_lat,list) or isinstance(max_lat,list):
                 return False 
-            if ((max_lon >= bbox[2] and min_lon <= bbox[1] and
-                min_lat <= bbox[3] and max_lat >= bbox[0]) or
-                (max_lon <= bbox[2] and min_lon >= bbox[1] and
-                min_lat >= bbox[3] and max_lat <= bbox[0])):
+            if max_lon >= bbox[1] and min_lon <= bbox[2] and max_lat >= bbox[3] and min_lat <= bbox[0]:
                 return True
             return False
         return False
@@ -261,7 +258,7 @@ def home_page():
                 with ui.card().tight().style('margin-top: 10px; max-width: 60vh'):
                     ui.label(f"ID: {item['id']}").style('font-weight: bold;')
                     ui.label(f"Title: {item['properties'].get('title', 'N/A')}").style('font-weight: bold;')
-                    ui.label(f"Description: {item['properties'].get('description', 'N/A')}").style('font-weight: bold;')
+                    ui.label(f"Description: {item['properties'].get('description', 'N/A')}").style('font-weight: bold; text-overflow: ellipsis;word-wrap: break-word; overflow: hidden; max-height: 4.2em;')
                     with ui.row():
                         ui.button("Show Metadata").on('click', lambda e, dataset_id=item['id']: show_metadata(dataset_id))       
                         for item_link in item['links']:
@@ -350,7 +347,7 @@ def home_page():
             with ui.scroll_area().style('width: 400px;'):
                 ui.label(f"ID: {dataset['id']}").style('font-weight: bold;')
                 ui.label(f"Title: {dataset['properties'].get('title', 'N/A')}").style('font-weight: bold;')
-                ui.label(f"Description: {dataset['properties'].get('description', 'N/A')}").style('font-weight: bold;')
+                ui.label(f"Description: {dataset['properties'].get('description', 'N/A')}").style('font-weight: bold; text-overflow: ellipsis;word-wrap: break-word; overflow: hidden; max-height: 4.2em;')
                 with ui.row():
                     ui.label("Keywords:").style('font-weight: bold;')
                     for keyword in dataset['properties'].get('keywords', []):
