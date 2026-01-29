@@ -230,6 +230,8 @@ services:
         - PUID=0 # change this to your user id
         - PGID=0 # change this to your group id
         - STORAGE_SECRET="change-this-to-yor-own-private-secret"
+      networks:
+      - redis-net
 
   subscriber-france:
     container_name: subscriber

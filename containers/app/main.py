@@ -4,7 +4,29 @@ from xmlrpc import client
 import httpx
 from nicegui import app, ui, binding, context
 import json
+import copy
 
+json_sraps = {
+    "CMA": {},
+    "DWD": {},
+    "ECCC": {}
+}
+
+def scrap_all():
+    with httpx.Client() as client:
+        for url in [("https://gdc.wis.cma.cn","CMA"), ("https://wis2.dwd.de/gdc", "DWD"), ("https://wis2-gdc.weather.gc.ca", "ECCC")]:
+            try:
+                response = client.get(str(url[0]) + f'/collections/wis2-discovery-metadata/items?limit=2000&f=json', timeout=5)
+            except Exception as e:
+                print(f"Error fetching data from {url[0]}: {e}")
+                response = None
+                json_sraps[url[1]] = {}
+                continue
+            json_scrap = response.json()
+            json_sraps[url[1]] = json_scrap
+scrap_all_task = ui.run(scrap_all())
+
+SUBSCRIPTION_MANAGER = "http://subscription-manager:5001"
 app.colors(base_100="#FFFFFF",
            base_200="#5D8FCF",
            base_300="#77AEE4",
@@ -100,120 +122,193 @@ def home_page():
             page.right_sidebar.clear()
             label = ui.label("Please select a source GDC.").style('margin-left: 10px; font-weight: bold;').style('color: black;')
             if e.value == 'tree':
-                url = radio1 = ui.radio({"https://gdc.wis.cma.cn":'CMA', "https://wis2.dwd.de/gdc":'DWD', "https://wis2-gdc.weather.gc.ca":"ECCC" }).props('inline').on('update:model-value', lambda e: scrap_topics_tree(url.value))
+                url = radio1 = ui.radio({"CMA":'CMA', "DWD":'DWD', "ECCC":"ECCC" }).props('inline').on('update:model-value', lambda e: scrap_topics_tree(url.value))
             else:
-                url = radio1 = ui.radio({"https://gdc.wis.cma.cn":'CMA', "https://wis2.dwd.de/gdc":'DWD', "https://wis2-gdc.weather.gc.ca":"ECCC" }).props('inline').on('update:model-value', lambda e: scrap_topics_page(url.value))
+                url = radio1 = ui.radio({"CMA":'CMA', "DWD":'DWD', "ECCC":"ECCC" }).props('inline').on('update:model-value', lambda e: make_search_page(e.sender, url.value))
 
-    async def scrap_topics_page(url):
+    async def make_search_page(e, gdc):
         with page.content_card:
-            with ui.row():
+            page.content_card.clear()
+            label = ui.label("Please select a source GDC.").style('margin-left: 10px; font-weight: bold;').style('color: black;')
+            url = radio1 = ui.radio({"CMA":'CMA', "DWD":'DWD', "ECCC":"ECCC" },value=e.value).props('inline').on('update:model-value', lambda e: make_search_page(e.sender, url.value))
+            with ui.row() as search_row:
+                search_row.tag = "search_row"
                 search_input = ui.input(label='Search topics').style('width: 100%;')
-                search_button = ui.button('Search').style('margin-left: 10px;').on('click', lambda: perform_search(search_input.value,url))
+            with ui.row() as filters_row:
+                filters_row.tag = "filters_row"
+                search_data_type = ui.select(options=['all','core','recommended'], label='Data Policy', value='all').style('width: 15vh')
+                search_keyword = ui.input(label='Keywords use (,)s').style('width: 15vh;')
+            with ui.row() as bbox_row:
+                bbox_row.tag = "bbox_row"
+                search_bbox_north = ui.number(label='North',max=90, min=-90).style('width: 10vh;')
+                search_bbox_west = ui.number(label='West',max=180, min=-180).style('width: 10vh;')
+                search_bbox_east = ui.number(label='East',max=180, min=-180).style('width: 10vh;')
+                search_bbox_south = ui.number(label='South',max=90, min=-90).style('width: 10vh;')
+            with ui.row() as button_row:
+                search_button = ui.button('Search').style('margin-left: 10px;').on('click', lambda: perform_search(search_input.value,gdc,search_data_type.value,search_keyword.value,[search_bbox_north.value,search_bbox_west.value,search_bbox_east.value,search_bbox_south.value]))
+                button_row.tag = "search_button"
+
+    def filter_feature(feature, query):
+        if feature.get("id") is not None and query.lower() in feature['id'].lower():
+            return True
+        if 'properties' in feature:
+            for key, value in feature['properties'].items():
+                if isinstance(value, str) and query.lower() in value.lower():
+                    return True
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, str) and query.lower() in item.lower():
+                            return True
+        return False
     
-    async def perform_search(query, url):
+    def filter_by_data_policy(feature, data_policy):
+        if data_policy == 'all':
+            return True
+        if 'properties' in feature and 'wmo:dataPolicy' in feature['properties']:
+            return feature['properties']['wmo:dataPolicy'] == data_policy
+        return False
+    
+    def filter_by_keywords(feature, keywords):
+        if not keywords:
+            return True
+        keyword_list = [kw.strip().lower() for kw in keywords.split(',')]
+        if 'properties' in feature and 'keywords' in feature['properties']:
+            feature_keywords = [kw.lower() for kw in feature['properties']['keywords']]
+            for kw in keyword_list:
+                if kw not in feature_keywords:
+                    return False
+            return True
+        return False
+    
+    def filter_by_bbox(feature, bbox):
+        if not all(bbox):
+            return True
+        if 'geometry' in feature and feature['geometry'] is not None:
+            coordinates = feature['geometry']['coordinates'][0]
+            print(coordinates)
+            if isinstance(coordinates, list) and isinstance(coordinates[0], list):
+                pass
+            else:
+                return False
+            lons = [coord[0] for coord in coordinates]
+            lats = [coord[1] for coord in coordinates]
+            min_lon, max_lon = min(lons), max(lons)
+            min_lat, max_lat = min(lats), max(lats)
+            if isinstance(min_lon,list) or isinstance(max_lon,list) or isinstance(min_lat,list) or isinstance(max_lat,list):
+                return False 
+            if ((max_lon >= bbox[2] and min_lon <= bbox[1] and
+                min_lat <= bbox[3] and max_lat >= bbox[0]) or
+                (max_lon <= bbox[2] and min_lon >= bbox[1] and
+                min_lat >= bbox[3] and max_lat <= bbox[0])):
+                return True
+            return False
+        return False
+    
+    async def perform_search(query, gdc, data_policy, keywords, bbox):
         page.right_sidebar.clear()
         page.left_sidebar.clear()
-        async with httpx.AsyncClient() as client:
-            with page.content_card:
-                for child in page.content_card.descendants():
-                    print("Deleting child:", child)
-                    if isinstance(child,ui.column):
-                        child.delete()
-                        ui.update()
-                with ui.column() as results_column:
-                    results_column.set_visibility(True)
-                    response = await client.get(str(url) + f'/collections/wis2-discovery-metadata/items?limit=10&f=json&q={query}')
-                    json = response.json()
-                    tree.features = {}
-                    tree.selected_topics = []
-                    tree.value = 5
-                    for item in json['features']:
-                        for link in item['links']:
-                            if "channel" in link and link["channel"].startswith('cache/'):
-                                if link["channel"] not in tree.features:
-                                    tree.features[link["channel"]] = []
-                                tree.features[link["channel"]].append(item)
-                                break  
-                    total_matched = json["numberMatched"]
-                    num_pages = (total_matched // 10) + (1 if total_matched % 10 > 0 else 0)
-                    page_selector = ui.select(options=[str(i+1) for i in range(num_pages)], label='Page', value='1', with_input=True).style('width: 10vh;').on('update:model-value', lambda e: update_search_results(page_selector, query, url, results_column))
-                    await update_search_results(page_selector, query, url, results_column)
-
-    async def update_search_results(page_selector, query, url, results_column):
-        print(tree.features)
-        print(tree.selected_topics)
-        with results_column:
-            page_number = int(page_selector.value)
-            num_pages = len(page_selector.options)
-            results_column.clear()
-            page_selector = ui.select(options=[str(i+1) for i in range(num_pages)], label='Page', value=str(page_number), with_input=True).style('width: 10vh;').on('update:model-value', lambda e: update_search_results(page_selector, query, url, results_column))
-            async with httpx.AsyncClient() as client:
-                offset = (page_number - 1) * 10
-                response = await client.get(str(url) + f'/collections/wis2-discovery-metadata/items?limit=10&f=json&q={query}&offset={offset}')
-                json = response.json()
-                ui.label(f"Number Returned: {json['numberReturned']}")
-                tree_list = []
-                i = 0
-                for item in json['features']:
-                    with ui.card().tight().style('margin-top: 10px; max-width: 60vh'):
-                        ui.label(f"ID: {item['id']}").style('font-weight: bold;')
-                        ui.label(f"Title: {item['properties'].get('title', 'N/A')}").style('font-weight: bold;')
-                        ui.label(f"Description: {item['properties'].get('description', 'N/A')}").style('font-weight: bold;')
-                        with ui.row():
-                            ui.button("Show Metadata").on('click', lambda e, dataset_id=item['id']: show_metadata(dataset_id))       
-                            for item_link in item['links']:
-                                if "channel" in item_link and item_link["channel"].startswith('cache/'):
-                                    tree_list.append(Tree([item_link['channel']]))
-                                    i+=1
-                                    selector = ui.button("Select").on('click', lambda e, tree=tree_list[i-1]: on_topics_picked(tree,sender=e.sender))
-                                    if item_link['channel'] in tree.selected_topics:
-                                        selector.text = "Deselect"
-                                    break   
-
-    async def scrap_topics_tree(url):
-        async with httpx.AsyncClient() as client:
-            with page.content_card:
-                label = ui.label('Loading...').style('margin-left: 10px; font-weight: bold;').style('color: black;')
-                response = await client.get(str(url) + '/collections/wis2-discovery-metadata/items?limit=2000&f=json')
-                json = response.json()
-                ui.update()
-                tree.features = {}
-                dicc = {}
-                # for item in json['features']:
-                #     if "wmo:topicHierarchy" in item['properties']:
-                #         print("Processing topic:", item['properties']['wmo:topicHierarchy'])
-                #         dicc = put_in_dicc(dicc, item['properties']['wmo:topicHierarchy'], item['properties']['wmo:topicHierarchy'])
-                for item in json['features']:
-                    # if len(item['links']) > 0 and "channel" in item['links'][0] and item['links'][0]["channel"].startswith('cache/'):
-                    for link in item['links']:
-                        if "channel" in link and link["channel"].startswith('cache/'):
-                            if link["channel"] not in tree.features:
-                                tree.features[link["channel"]] = []
-                            tree.features[link["channel"]].append(item)
-                            dicc = put_in_dicc(dicc, link["channel"], link["channel"])
-                            break  
-                print("deleting old tree")
-                if not isinstance(tree.value, int):
-                    for ancestor in tree.value.ancestors():
-                        ancestor.delete()
+        with page.content_card:
+            for child in page.content_card.descendants():
+                if child.tag in ["results_column", "results_label"]:
+                    child.delete()
+                    ui.update()
+            json = copy.deepcopy(json_sraps[gdc])
+            features = [feature for feature in json['features'] if filter_feature(feature, query)]
+            features = [feature for feature in features if filter_by_data_policy(feature, data_policy)]
+            features = [feature for feature in features if filter_by_keywords(feature, keywords)]
+            features = [feature for feature in features if filter_by_bbox(feature, bbox)]
+            print(len(features))
+            if len(features) == 0:
+                results_label = ui.label("No results found.").style('margin-top: 10px; font-weight: bold;').style('color: black;')
+                results_label.tag = "results_label"
+                return
+            json['features'] = features
+            # for feature in json['features']:
+            #     if feature.contains(query):
+            #         features.append(feature)
+            tree.features = {}
+            tree.selected_topics = []
+            tree.value = 5
+            for item in json['features']:
+                for link in item['links']:
+                    if "channel" in link and link["channel"].startswith('cache/'):
+                        if link["channel"] not in tree.features:
+                            tree.features[link["channel"]] = []
+                        tree.features[link["channel"]].append(item)
                         break
-                with ui.scroll_area().style('height: 90vh;'):
-                    filter = ui.input(label='Filter topics')
-                    new_tree = ui.tree([dicc], label_key='label', tick_strategy='strict', on_tick=lambda e: on_topics_picked(e))
-                    filter.bind_value_to(new_tree, 'filter')
-                    tree.value = new_tree
-                label.text = ''
+            total_matched = len(json["features"])
+            num_pages = (total_matched // 10) + (1 if total_matched % 10 > 0 else 0)
+            
+            with ui.column() as results_column:
+                results_column.tag = "results_column"
+                page_selector = ui.select(options=[str(i+1) for i in range(num_pages)], label='Page', value='1', with_input=True).style('width: 10vh;').on('update:model-value', lambda e: update_search_results(page_selector, query, gdc, json))
+                await update_search_results(page_selector, query, gdc, json)
+
+    async def update_search_results(page_selector, query, gdc, filtered_json):
+        page_number = int(page_selector.value)
+        num_pages = len(page_selector.options)
+        page_selector.parent_slot.parent.clear()
+        with page_selector.parent_slot.parent as results_column:
+            page_selector = ui.select(options=[str(i+1) for i in range(num_pages)], label='Page', value=str(page_number), with_input=True).style('width: 10vh;').on('update:model-value', lambda e: update_search_results(page_selector, query, gdc,filtered_json))
+            offset = (page_number - 1) * 10
+            json = filtered_json
+            tree_list = []
+            i = 0
+            for j in range(offset, offset + 10):
+                if j >= len(json['features']):
+                    break
+                item = json['features'][j]
+                with ui.card().tight().style('margin-top: 10px; max-width: 60vh'):
+                    ui.label(f"ID: {item['id']}").style('font-weight: bold;')
+                    ui.label(f"Title: {item['properties'].get('title', 'N/A')}").style('font-weight: bold;')
+                    ui.label(f"Description: {item['properties'].get('description', 'N/A')}").style('font-weight: bold;')
+                    with ui.row():
+                        ui.button("Show Metadata").on('click', lambda e, dataset_id=item['id']: show_metadata(dataset_id))       
+                        for item_link in item['links']:
+                            if "channel" in item_link and item_link["channel"].startswith('cache/'):
+                                tree_list.append(Tree([item_link['channel']]))
+                                i+=1
+                                selector = ui.button("Select").on('click', lambda e, tree=tree_list[i-1]: on_topics_picked(tree,sender=e.sender) and update_search_results(page_selector, query, gdc, filtered_json))
+                                if item_link['channel'] in tree.selected_topics:
+                                    selector.text = "Deselect"
+                                break   
+
+    async def scrap_topics_tree(gdc):
+        with page.content_card:
+            json = json_sraps[gdc]
+            ui.update()
+            tree.features = {}
+            dicc = {}
+            # for item in json['features']:
+            #     if "wmo:topicHierarchy" in item['properties']:
+            #         print("Processing topic:", item['properties']['wmo:topicHierarchy'])
+            #         dicc = put_in_dicc(dicc, item['properties']['wmo:topicHierarchy'], item['properties']['wmo:topicHierarchy'])
+            for item in json['features']:
+                # if len(item['links']) > 0 and "channel" in item['links'][0] and item['links'][0]["channel"].startswith('cache/'):
+                for link in item['links']:
+                    if "channel" in link and link["channel"].startswith('cache/'):
+                        if link["channel"] not in tree.features:
+                            tree.features[link["channel"]] = []
+                        tree.features[link["channel"]].append(item)
+                        dicc = put_in_dicc(dicc, link["channel"], link["channel"])
+                        break  
+            if not isinstance(tree.value, int):
+                for ancestor in tree.value.ancestors():
+                    ancestor.delete()
+                    break
+            with ui.scroll_area().style('height: 90vh;'):
+                filter = ui.input(label='Filter topics')
+                new_tree = ui.tree([dicc], label_key='label', tick_strategy='strict', on_tick=lambda e: on_topics_picked(e))
+                filter.bind_value_to(new_tree, 'filter')
+                tree.value = new_tree
+            label.text = ''
 
     def on_topics_picked(e,sender=None):
         if len(e.value) == 1:
             if e.value[0] not in tree.selected_topics:
                 tree.selected_topics.append(e.value[0])
-                if sender is not None:
-                    sender.text = "Deselect"
             else:
                 tree.selected_topics.remove(e.value[0])
-                if sender is not None:
-                    sender.text = "Select"
         else:
             tree.selected_topics = e.value
         topics = tree.selected_topics
@@ -236,16 +331,14 @@ def home_page():
     
     async def subscribe_to_topics(topics, directory):
         async with httpx.AsyncClient() as client:
-            if directory == '':
+            if directory.strip() == '':
                 directory = 'data'
             for topic in topics:
                 payload = {
                     "topic": topic,
                     "target": directory
                 }
-                print("Subscribing to topic:", topic)
-                print("With payload:", payload)
-                response = await client.post('http://172.18.0.7:5001/subscriptions', json=payload)
+                response = await client.post(f'{SUBSCRIPTION_MANAGER}/subscriptions', json=payload)
 
     async def show_metadata(dataset):
         for (key,features) in tree.features.items():
@@ -304,27 +397,25 @@ def unsuscribe_page():
 
     async def load_subscriptions():
         async with httpx.AsyncClient() as client:
-            response = await client.get('http://172.18.0.7:5001/subscriptions')
+            response = await client.get(f'{SUBSCRIPTION_MANAGER}/subscriptions')
             page.subscriptions = response.json()
-            print("Loaded subscriptions:", page.subscriptions)
             for element in page.content.descendants():
                 if element is not reload and element is not page.content:
                     element.delete()
             with page.content:
                 scroll_area = ui.scroll_area().style('height: 90vh;') 
             with scroll_area:
-                for broker in page.subscriptions:
-                    for (sub) in page.subscriptions[broker]:
-                        with ui.row():
-                            ui.label(f"Topic: {sub}").style('margin-left: 10px; font-weight: bold;').style('color: black;')
-                            ui.label(f"Folder: {page.subscriptions[broker][sub]['target']}").style('margin-left: 10px; font-weight: bold;').style('color: black;')
-                            ui.button("Unsubscribe").style('margin-left: 10px;').on('click', lambda e: unsubscribe(e.sender.parent_slot.children[0].text.replace('Topic: ', '')))
+                for (sub) in page.subscriptions:
+                    with ui.row():
+                        ui.label(f"Topic: {sub}").style('margin-left: 10px; font-weight: bold;').style('color: black;')
+                        ui.label(f"Folder: {page.subscriptions[sub]['save_path']}").style('margin-left: 10px; font-weight: bold;').style('color: black;')
+                        ui.button("Unsubscribe").style('margin-left: 10px;').on('click', lambda e: unsubscribe(e.sender.parent_slot.children[0].text.replace('Topic: ', '')))
     
     async def unsubscribe(sub_id):
         async with httpx.AsyncClient() as client:
-            print("Unsubscribing from:", sub_id)
             sub_id = sub_id.replace('#', '%23')
-            response = await client.delete(f'http://172.18.0.7:5001/subscriptions/{sub_id}')
+            sub_id = sub_id.replace('+', '%2B')
+            response = await client.delete(f'{SUBSCRIPTION_MANAGER}/subscriptions/{sub_id}')
             await load_subscriptions()
 
 
