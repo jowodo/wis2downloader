@@ -31,6 +31,117 @@ Edit `.env` to configure your deployment, then start:
 docker-compose up -d
 ----
 
+=== Volume Permissions
+
+The application containers run as a non-root user (`wis2`) for security. To allow containers to write downloaded files to the host filesystem, you must configure proper permissions on the `downloads/` directory.
+
+==== Container User Details
+
+[cols="1,2"]
+|===
+|Property |Value
+
+|Username
+|`wis2`
+
+|User ID (UID)
+|`10001`
+
+|Group name
+|`wis2`
+
+|Group ID (GID)
+|`988`
+|===
+
+The Celery worker writes files to `/data` inside the container, which maps to `./downloads/` on the host.
+
+==== Option 1: Create Matching User/Group (Recommended)
+
+Create a user and group on the host system that matches the container's UID/GID:
+
+[source,bash]
+----
+# Create the wis2 group with GID 988
+sudo groupadd -g 988 wis2
+
+# Create the wis2 user with UID 10001
+sudo useradd -u 10001 -g wis2 -M -s /usr/sbin/nologin wis2
+
+# Set ownership on the downloads directory
+sudo mkdir -p downloads
+sudo chown -R wis2:wis2 downloads
+----
+
+==== Option 2: Use ACLs (Flexible)
+
+If you cannot create a matching user/group, use POSIX Access Control Lists to grant the container's UID write access:
+
+[source,bash]
+----
+# Ensure ACL support is installed
+sudo apt-get install acl  # Debian/Ubuntu
+sudo yum install acl      # RHEL/CentOS
+
+# Create the downloads directory
+mkdir -p downloads
+
+# Grant UID 10001 full access
+sudo setfacl -R -m u:10001:rwx downloads
+sudo setfacl -R -d -m u:10001:rwx downloads  # Default ACL for new files
+----
+
+==== Option 3: Permissive Directory
+
+WARNING: This approach is less secure and not recommended for production.
+
+[source,bash]
+----
+mkdir -p downloads
+chmod 777 downloads
+----
+
+==== Verifying Permissions
+
+Test that the container can write to the volume:
+
+[source,bash]
+----
+# Start the celery container
+docker-compose up -d celery
+
+# Test write access from inside the container
+docker exec celery touch /data/test-write && echo "Write OK" || echo "Write FAILED"
+
+# Clean up
+docker exec celery rm -f /data/test-write
+----
+
+If the test fails with "Permission denied", review the ownership and permissions of the `downloads/` directory on the host.
+
+==== Shared Access with Host Users
+
+If you need host users to read downloaded files, add them to the `wis2` group:
+
+[source,bash]
+----
+# Add your user to the wis2 group
+sudo usermod -aG wis2 $USER
+
+# Log out and back in for group membership to take effect
+# Then verify
+groups  # Should include 'wis2'
+----
+
+Alternatively, use ACLs to grant read access to specific users:
+
+[source,bash]
+----
+# Grant read access to a specific user
+sudo setfacl -R -m u:youruser:rx downloads
+sudo setfacl -R -d -m u:youruser:rx downloads
+----
+
 === Verifying Deployment
 
 [source,bash]

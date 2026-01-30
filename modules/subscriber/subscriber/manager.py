@@ -29,6 +29,8 @@ def run_manager():
     mqtt_subscriber = Subscriber(**broker_config)
 
     redis_listener = CommandListener(
+
+
         subscriber=mqtt_subscriber,
         channel=COMMAND_CHANNEL
     )

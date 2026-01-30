@@ -59,10 +59,17 @@ WIS2 Downloader subscribes to MQTT topics on WIS2 Global Brokers, receives notif
 
 [source,bash]
 ----
-# Clone and start
+# Clone and configure
 git clone https://github.com/wmo-im/wis2downloader-refactor.git
 cd wis2downloader-refactor
 cp default.env .env  # Customize if needed
+
+# Set up downloads directory permissions (containers run as UID 10001)
+sudo groupadd -g 988 wis2
+sudo useradd -u 10001 -g wis2 -M -s /usr/sbin/nologin wis2
+mkdir -p downloads && sudo chown wis2:wis2 downloads
+
+# Start services
 docker-compose up -d
 
 # Create a subscription
@@ -76,6 +83,8 @@ curl -X POST http://localhost:5002/subscriptions \
 # View downloaded files
 ls -la downloads/surface-obs/
 ----
+
+NOTE: The containers run as a non-root user (UID 10001, GID 988). If you encounter permission errors writing to the downloads directory, see link:docs/admin-guide.adoc#_volume_permissions[Volume Permissions] in the Admin Guide for alternative approaches including ACLs.
 
 == Documentation
 
