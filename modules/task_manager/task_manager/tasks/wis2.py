@@ -10,6 +10,7 @@ import mimetypes
 import os
 from pathlib import Path
 from prometheus_client import Counter, Gauge
+import tempfile
 import time
 import urllib3
 from urllib.parse import urlsplit
@@ -21,16 +22,23 @@ from shared import get_redis_client
 
 LOGGER = get_task_logger(__name__)
 
-DATA_BASEPATH = os.getenv("DATA","/data") # this needs checking
+DATA_BASEPATH = os.getenv("DATA_BASEPATH","/data") # this needs checking
 
 STATUS_SUCCESS = "SUCCESS"
 STATUS_FAILED = "FAILED"
 STATUS_SKIPPED = "SKIPPED"
 STATUS_PENDING = "PENDING"
 STATUS_VALID_CONDITIONS = [STATUS_SUCCESS, STATUS_FAILED, STATUS_SKIPPED, STATUS_PENDING]
-REDIS_TTL_SECONDS = int(os.getenv("REDIS_TTL_SECONDS", 3600))
-LOCK_EXPIRE = int(os.getenv("REDIS_MESSAGE_LOCK", 300))
-CACHE_EXCLUDE_LIST = os.getenv("GC_EXCLUDE","").split(",")
+try:
+    REDIS_TTL_SECONDS = int(os.getenv("REDIS_TTL_SECONDS", 3600))
+    LOCK_EXPIRE = int(os.getenv("REDIS_MESSAGE_LOCK", 300))
+except Exception as e:
+    LOGGER.error(f"Error getting environment variables {e}")
+    raise e
+CACHE_EXCLUDE_LIST = [x.strip() for x in os.getenv("GC_EXCLUDE", "").split(",") if x.strip()]
+
+ALLOWED_HASH_METHODS = ("sha256", "sha384", "sha512", "sha3_256",
+                        "sha3_384", "sha3_512")
 
 _pool = urllib3.PoolManager()
 hash_module = importlib.import_module("hashlib")
@@ -324,7 +332,7 @@ def download_from_wis2(self, job):
     filehash = job.get('payload',{}).get('properties',{}).get('integrity',{}).get('value')  # noqa
     result['filehash'] = filehash
 
-    metadata_id = job['payload']['properties'].get("metadata_id")
+    metadata_id = job.get('payload',{}).get('properties',{}).get("metadata_id")
     result['metadata_id'] = metadata_id
 
     result['broker'] = job['_broker']
@@ -357,7 +365,7 @@ def download_from_wis2(self, job):
     # Now attempt download
     try:
         # Now parse download URL from payload link
-        download_url, expected_length, overwrite = _select_download_link(job['payload']['links'])
+        download_url, expected_length, overwrite = _select_download_link(job.get('payload',{}).get('links',{}))
         result['download_url'] = download_url
 
         # check we have a download URL
@@ -373,6 +381,14 @@ def download_from_wis2(self, job):
         target_directory.mkdir(exist_ok=True, parents=True)
         filename = os.path.basename(urlsplit(download_url).path)
         output_path = target_directory / filename
+        # Check for directory traversal
+        if target_directory.resolve() != output_path.resolve().parent:
+            result['status'] = STATUS_FAILED
+            result['reason'] = f"Invalid target directory {target_directory}"
+            result['error_class'] = "InvalidTargetDirectory"
+            return result
+
+        # store output path in result
         result['filepath'] = str(output_path)
         
         # extract cache
@@ -403,20 +419,23 @@ def download_from_wis2(self, job):
                                  timeout=urllib3.Timeout(connect=5.0, read=60.0))
         except urllib3.exceptions.ConnectTimeoutError as e:
             result['status'] = STATUS_FAILED
-            result['reason'] = f"Connection timeout error {e} for {result['global_cache']}"
+            result['reason'] = f"Connection timeout error for {result['global_cache']}, see logs"
             result['error_class'] = str(e.__class__.__name__)
+            LOGGER.error(f"Connection timeout error {e} for {result['global_cache']}")
         except urllib3.exceptions.ReadTimeoutError as e:
             result['status'] = STATUS_FAILED
-            result['reason'] = f"Download timeout  error {e} for {result['global_cache']}"
+            result['reason'] = f"Download timeout  error for {result['global_cache']}, see logs"
             result['error_class'] = str(e.__class__.__name__)
+            LOGGER.error(f"Download timeout error {e} for {result['global_cache']}")
         except urllib3.exceptions.MaxRetryError as e:
             result['status'] = STATUS_FAILED
             result['reason'] = f"Maximum retries downloading from {result['global_cache']} exceeded"
             result['error_class'] = str(e.__class__.__name__)
         except Exception as e:
             result['status'] = STATUS_FAILED
-            result['reason'] = f"Error {e} while downloading from {result['global_cache']}"
+            result['reason'] = f"Error while downloading from {result['global_cache']}, see logs"
             result['error_class'] = str(e.__class__.__name__)
+            LOGGER.error(f"Error {e} while downloading from {result['global_cache']}")
 
         if result['status'] == STATUS_FAILED:
             final_status = result.get('status', STATUS_FAILED)
@@ -447,15 +466,28 @@ def download_from_wis2(self, job):
             return result
 
         # hash verification
-        hash_props = job['payload']['properties'].get('integrity',{})
+        hash_props = job.get('payload',{}).get('properties',{}).get('integrity',{})
         hash_method = hash_props.get('method','sha512')
         hash_expected = hash_props.get('value')
 
         if hash_method:
             sanitized_method = hash_method.replace('-', '_')
+            if sanitized_method not in ALLOWED_HASH_METHODS:
+                result['status'] = STATUS_SKIPPED
+                result['reason'] = f"Invalid hash method"
+                result['error_class'] = "InvalidHashMethod"
+                LOGGER.warning(
+                    f"File {output_path} skipped, invalid hash method '{sanitized_method}'")
+                return result
+
             hash_function = getattr(hash_module, sanitized_method, None)
             if not hash_function:
-                LOGGER.error(f"Invalid hash method '{hash_method}'")
+                result['status'] = STATUS_SKIPPED
+                result['reason'] = f"Hash method not found"
+                result['error_class'] = "InvalidHashMethod"
+                LOGGER.warning(
+                    f"File {output_path} skipped, hash method '{sanitized_method}' not found")
+                return result
             else:
                 hash_bytes = hash_function(data).digest()
                 hash_base64 = base64.b64encode(hash_bytes).decode()
@@ -471,8 +503,39 @@ def download_from_wis2(self, job):
                         result['error_class'] = "HashVerificationError"
                         return result
 
-        # now save the data
-        output_path.write_bytes(data)
+        # now save the data, first write to tmp file
+        tmp_path = None
+        try:
+            fh, tmp_path = tempfile.mkstemp(dir=target_directory,
+                                            prefix='.tmp_')
+            try:
+                os.write(fh, data)
+            finally:
+                os.close(fh)
+
+            if overwrite:
+                os.replace(tmp_path, output_path)
+            else:
+                try:
+                    os.link(tmp_path, output_path)
+                    Path(tmp_path).unlink(missing_ok=True)
+                except FileExistsError:
+                    Path(tmp_path).unlink(missing_ok=True)
+                    result['status'] = STATUS_SKIPPED
+                    result['reason'] = "File created by another process"
+                    result['error_class'] = "FileExistsError"
+                    LOGGER.warning(
+                        f"File {output_path} already exists (race condition), skipping")
+                    return result
+        except OSError as e:
+            if tmp_path:
+                Path(tmp_path).unlink(missing_ok=True)
+            result['status'] = STATUS_FAILED
+            result['reason'] = "Failed to write file, see logs"
+            result['error_class'] = str(e.__class__.__name__)
+            LOGGER.error(f"Failed to write {output_path}: {e}")
+            return result
+
         result['save'] = True
         result['status'] = STATUS_SUCCESS
 
@@ -482,7 +545,7 @@ def download_from_wis2(self, job):
     except Exception as e:
         LOGGER.error(f"Error processing job {message_id}: {e}", exc_info=True)
         result['status'] = STATUS_FAILED
-        result['reason'] = str(e)
+        result['reason'] = f"Error processing job {message_id}, see logs"
         result['error_class'] = str(e.__class__.__name__)
         return result
 

@@ -1,13 +1,14 @@
-import time
+import certifi
 from datetime import datetime
 from fnmatch import fnmatch
 import json
-import ssl
-
 import paho.mqtt.client as mqtt
+import ssl
+import time
 
+from shared.logging import setup_logging
 from task_manager.workflows import wis2_download
-from shared import setup_logging
+
 
 LOGGER = setup_logging(__name__)
 
@@ -29,7 +30,9 @@ class Subscriber():
         self.client = mqtt.Client(**args)
 
         if port in [443, 8883]:
-            self.client.tls_set(ca_certs=None, certfile=None, keyfile=None,
+            self.client.tls_set(ca_certs=certifi.where(),
+                                certfile=None,
+                                keyfile=None,
                                 cert_reqs=ssl.CERT_REQUIRED,
                                 tls_version=ssl.PROTOCOL_TLS,
                                 ciphers=None)
