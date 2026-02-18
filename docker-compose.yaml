@@ -149,6 +149,18 @@ services:
       start_period: 5s
       retries: 3
 
+  wis2downloader-ui:
+      build:
+        no_cache: true
+        context: .
+        dockerfile: ./containers/ui/Dockerfile
+      ports:
+        - 8080:8080
+      volumes:
+        - ./modules/ui:/app # mounting local app directory
+      networks:
+      - redis-net
+
   subscriber-france:
     container_name: subscriber-france
     restart: always
