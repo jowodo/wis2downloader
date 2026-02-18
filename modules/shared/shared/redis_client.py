@@ -9,9 +9,17 @@ from .logging import setup_logging
 
 LOGGER = setup_logging(__name__)
 
-REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT: int = int(os.getenv("REDIS_PORT", 6379))
-REDIS_DB: int = int(os.getenv("REDIS_DATABASE", 0))
+try:
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", 6379))
+    REDIS_DB: int = int(os.getenv("REDIS_DATABASE", 0))
+    REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD")
+except Exception as e:
+    LOGGER.error(f"Error getting environment variables {e}")
+    raise e
+
+if not REDIS_PASSWORD:
+    raise ValueError("REDIS_PASSWORD must be set")
 
 _redis_client: Optional[redis.Redis] = None
 
@@ -27,6 +35,7 @@ def get_redis_client() -> redis.Redis:
                 host=REDIS_HOST,
                 port=REDIS_PORT,
                 db=REDIS_DB,
+                password=REDIS_PASSWORD,
                 socket_timeout=5,
                 socket_connect_timeout=5,
                 retry_on_timeout=True

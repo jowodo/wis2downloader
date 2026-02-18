@@ -10,6 +10,7 @@ import mimetypes
 import os
 from pathlib import Path
 from prometheus_client import Counter, Gauge
+import tempfile
 import time
 import urllib3
 from urllib.parse import urlsplit
@@ -21,16 +22,23 @@ from shared import get_redis_client
 
 LOGGER = get_task_logger(__name__)
 
-DATA_BASEPATH = os.getenv("DATA","/data") # this needs checking
+DATA_BASEPATH = os.getenv("DATA_BASEPATH","/data") # this needs checking
 
 STATUS_SUCCESS = "SUCCESS"
 STATUS_FAILED = "FAILED"
 STATUS_SKIPPED = "SKIPPED"
 STATUS_PENDING = "PENDING"
 STATUS_VALID_CONDITIONS = [STATUS_SUCCESS, STATUS_FAILED, STATUS_SKIPPED, STATUS_PENDING]
-REDIS_TTL_SECONDS = int(os.getenv("REDIS_TTL_SECONDS", 3600))
-LOCK_EXPIRE = int(os.getenv("REDIS_MESSAGE_LOCK", 300))
-CACHE_EXCLUDE_LIST = os.getenv("GC_EXCLUDE","").split(",")
+try:
+    REDIS_TTL_SECONDS = int(os.getenv("REDIS_TTL_SECONDS", 3600))
+    LOCK_EXPIRE = int(os.getenv("REDIS_MESSAGE_LOCK", 300))
+except Exception as e:
+    LOGGER.error(f"Error getting environment variables {e}")
+    raise e
+CACHE_EXCLUDE_LIST = [x.strip() for x in os.getenv("GC_EXCLUDE", "").split(",") if x.strip()]
+
+ALLOWED_HASH_METHODS = ("sha256", "sha384", "sha512", "sha3_256",
+                        "sha3_384", "sha3_512")
 
 _pool = urllib3.PoolManager()
 hash_module = importlib.import_module("hashlib")
@@ -52,46 +60,46 @@ DEFAULT_ACCEPTED_MEDIA_TYPES = [
 
 # define some metrics for prometheus
 
-NOTIFICATIONS_RECEIVED = Counter(
-    'wis2_notifications_received',
-    'Total number of notifications received.',
-    ['broker', 'cache', 'centre_id', 'topic']
+NOTIFICATIONS_TOTAL = Counter(
+    'wis2downloader_notifications_total',
+    'Total number of notifications processed.',
+    ['status']
 )
 
-NOTIFICATIONS_SKIPPED = Counter(
-    'wis2_notifications_skipped',
-    'Total number of notifications skipped.',
-    ['broker', 'cache', 'centre_id', 'topic', 'reason']
-)
-
-DOWNLOADS_FAILED = Counter(
-    'wis2_downloads_failed',
-    'Total number of failed downloads.',
-    ['cache', 'centre_id', 'topic', 'reason', 'media_type']
-)
-
-DOWNLOADS_TOTAL_FILES = Counter(
-    'wis2_downloads_total',
+DOWNLOADS_TOTAL = Counter(
+    'wis2downloader_downloads_total',
     'Total number of files downloaded.',
-    ['broker', 'cache', 'centre_id', 'topic', 'media_type']
+    ['cache', 'media_type']
 )
 
-DOWNLOADS_TOTAL_BYTES = Counter(
-    'wis2_downloads_bytes_total',
+DOWNLOADS_BYTES_TOTAL = Counter(
+    'wis2downloader_downloads_bytes_total',
     'Total number of bytes downloaded.',
-    ['broker', 'cache', 'centre_id', 'topic', 'media_type']
+    ['cache', 'media_type']
+)
+
+SKIPPED_TOTAL = Counter(
+    'wis2downloader_skipped_total',
+    'Total number of skipped notifications by reason.',
+    ['reason']
+)
+
+FAILED_TOTAL = Counter(
+    'wis2downloader_failed_total',
+    'Total number of failed downloads by reason.',
+    ['cache', 'reason']
 )
 
 
 def set_status(key, type, status):
     if key in (None, ''):
-        LOGGER.error("No key provided")
+        LOGGER.warning("No key provided")
         return
     if type not in ('by-msg-id', 'by-hash', 'by-data-id'):
-        LOGGER.error(f"Invalid type {type}")
+        LOGGER.warning(f"Invalid type {type}")
         return
     if status not in STATUS_VALID_CONDITIONS:
-        LOGGER.error(f"Invalid status '{status}' for {key} ({type})")
+        LOGGER.warning(f"Invalid status '{status}' for {key} ({type})")
     tracker_id = f"{TRACKER}:{type}:{key}"
 
     try:
@@ -105,10 +113,10 @@ def set_status(key, type, status):
 def get_status(key, type):
     status = None
     if key in (None, ''):
-        LOGGER.error("No key provided")
+        LOGGER.warning("No key provided")
         return status
     if type not in ('by-msg-id', 'by-hash', 'by-data-id'):
-        LOGGER.error(f"Invalid type {type}")
+        LOGGER.warning(f"Invalid type {type}")
         return status
 
     tracker_id = f"{TRACKER}:{type}:{key}"
@@ -169,91 +177,47 @@ def _now_utc_str() -> str:
 
 
 def metrics_collector(func):
-    # the download_from_wis function has several return points, hence, to
-    # ensure we collect metrics each one wrap in a function. Previously, some
-    # were missed or wrong.
-    #
-    # 1) Total number of notifications received, incl. split by cache, centre-id and topic
-    # 2) Number of notifications skipped due to the data already successfully having been processed
-    # 3) Number of downloads attempted
-    # 4) Number of downloads successful
-    # 5) Number of bytes downloaded
+    """Collect metrics for each notification processed.
+
+    Metrics collected:
+    - wis2downloader_notifications_total: Count by status (success/failed/skipped)
+    - wis2downloader_downloads_total: Successful downloads by cache and media_type
+    - wis2downloader_downloads_bytes_total: Bytes downloaded by cache and media_type
+    - wis2downloader_skipped_total: Skipped notifications by reason
+    - wis2downloader_failed_total: Failed downloads by cache and reason
+    """
 
     @wraps(func)
     def wrapper(*args, **kwargs):
         result = func(*args, **kwargs)
 
-        status_code = result.get('status','')
-        global_cache = result.get('global_cache','')
-        global_broker = result.get('broker','')
-        topic = result.get('topic','')
-        reason = result.get('reason','')
-        error_class = result.get('error_class','')
-        centre_id = result.get('centre_id','')
-        file_size = result.get('actual_filesize',0)
-        media_type = result.get('media_type','')
+        status_code = result.get('status', '')
+        global_cache = result.get('global_cache', '') or 'unknown'
+        error_class = result.get('error_class', '') or 'unknown'
+        file_size = result.get('actual_filesize', 0)
+        media_type = result.get('media_type', '') or 'unknown'
 
         try:
-
-            NOTIFICATIONS_RECEIVED.labels(broker=global_broker,
-                                          cache=global_cache,
-                                          centre_id=centre_id,
-                                          topic=topic).inc()
-            # totals per broker
-            NOTIFICATIONS_RECEIVED.labels(broker=global_broker,
-                                          cache='total',
-                                          centre_id=centre_id,
-                                          topic='total').inc()
+            # Always count the notification by final status
+            NOTIFICATIONS_TOTAL.labels(status=status_code.lower()).inc()
 
             if status_code == STATUS_SKIPPED:
-                NOTIFICATIONS_SKIPPED.labels(broker=global_broker,
-                                             cache=global_cache,
-                                             centre_id=centre_id,
-                                             topic=topic,
-                                             reason=error_class).inc()
+                SKIPPED_TOTAL.labels(reason=error_class).inc()
 
             if status_code == STATUS_FAILED:
-                DOWNLOADS_FAILED.labels(
-                    cache=global_cache,
-                    centre_id=centre_id,
-                    topic=topic,
-                    media_type=media_type,
-                    reason=error_class
-                ).inc()
+                FAILED_TOTAL.labels(cache=global_cache, reason=error_class).inc()
 
             if status_code == STATUS_SUCCESS:
-                DOWNLOADS_TOTAL_FILES.labels(
-                    broker=global_broker,
+                DOWNLOADS_TOTAL.labels(
                     cache=global_cache,
-                    centre_id=centre_id,
-                    topic=topic,
-                    media_type = media_type
+                    media_type=media_type
                 ).inc()
 
-                DOWNLOADS_TOTAL_FILES.labels(
-                    broker=global_broker,
+                DOWNLOADS_BYTES_TOTAL.labels(
                     cache=global_cache,
-                    centre_id='total',
-                    topic='total',
-                    media_type = media_type
-                ).inc()
-
-                DOWNLOADS_TOTAL_BYTES.labels(
-                    broker=global_broker,
-                    cache=global_cache,
-                    centre_id='total',
-                    topic=topic,
                     media_type=media_type
                 ).inc(file_size)
 
-
-                DOWNLOADS_TOTAL_BYTES.labels(
-                    broker=global_broker,
-                    cache=global_cache,
-                    centre_id='total',
-                    topic='total',
-                    media_type=media_type
-                ).inc(file_size)
         except Exception as e:
             LOGGER.error(f"Error collecting metrics: {e}", exc_info=True)
 
@@ -324,7 +288,7 @@ def download_from_wis2(self, job):
     filehash = job.get('payload',{}).get('properties',{}).get('integrity',{}).get('value')  # noqa
     result['filehash'] = filehash
 
-    metadata_id = job['payload']['properties'].get("metadata_id")
+    metadata_id = job.get('payload',{}).get('properties',{}).get("metadata_id")
     result['metadata_id'] = metadata_id
 
     result['broker'] = job['_broker']
@@ -349,7 +313,7 @@ def download_from_wis2(self, job):
     redis_client = get_redis_client()
     lock_acquired = redis_client.set(lock_key, 1, nx=True, ex=LOCK_EXPIRE)
     if not lock_acquired:  # lock acquired by another worker
-        LOGGER.warning(f"Could not acquire lock for {lock_key_identifier}, retrying in 10 seconds")
+        LOGGER.debug(f"Could not acquire lock for {lock_key_identifier}, retrying in 10 seconds")
         raise self.retry(countdown=10, max_retries=10)
 
 
@@ -357,12 +321,12 @@ def download_from_wis2(self, job):
     # Now attempt download
     try:
         # Now parse download URL from payload link
-        download_url, expected_length, overwrite = _select_download_link(job['payload']['links'])
+        download_url, expected_length, overwrite = _select_download_link(job.get('payload',{}).get('links',{}))
         result['download_url'] = download_url
 
         # check we have a download URL
         if not download_url:
-            result['status'] = STATUS_FAILED
+            result['status'] = STATUS_SKIPPED
             result['reason'] = "No download URL in notification message"
             result['error_class'] = "MissingDownloadURLError"
             return result
@@ -373,25 +337,32 @@ def download_from_wis2(self, job):
         target_directory.mkdir(exist_ok=True, parents=True)
         filename = os.path.basename(urlsplit(download_url).path)
         output_path = target_directory / filename
+        # Check for directory traversal
+        if target_directory.resolve() != output_path.resolve().parent:
+            result['status'] = STATUS_FAILED
+            result['reason'] = f"Invalid target directory {target_directory}"
+            result['error_class'] = "InvalidTargetDirectory"
+            return result
+
+        # store output path in result
         result['filepath'] = str(output_path)
         
         # extract cache
         result['global_cache'] = urlsplit(download_url).hostname
 
-        # ToDo, remove hard coding and move to config.
         if result['global_cache'] in CACHE_EXCLUDE_LIST:
             result['status'] = STATUS_SKIPPED
             result['reason'] = "Global cache black listed, skipped"
             result['error_class'] = "GlobalCacheBlacklisted"
-            LOGGER.warning(f"File {output_path} skipped from blacklisted cache")
+            LOGGER.debug(f"File {output_path} skipped from blacklisted cache")
             return result
 
         # check if the file exists, if so we have already processed this notification
         if output_path.exists() and not overwrite:
-            result['status'] = STATUS_FAILED
+            result['status'] = STATUS_SKIPPED
             result['reason'] = "File already exists and overwrite is not requested"
             result['error_class'] = "FileExistsError"
-            LOGGER.warning(f"File {output_path} already exists, skipping")
+            LOGGER.debug(f"File {output_path} already exists, skipping")
             return result
 
         # ToDo - investigate whether we want to replace the following with aria2
@@ -403,24 +374,27 @@ def download_from_wis2(self, job):
                                  timeout=urllib3.Timeout(connect=5.0, read=60.0))
         except urllib3.exceptions.ConnectTimeoutError as e:
             result['status'] = STATUS_FAILED
-            result['reason'] = f"Connection timeout error {e} for {result['global_cache']}"
+            result['reason'] = f"Connection timeout error for {result['global_cache']}, see logs"
             result['error_class'] = str(e.__class__.__name__)
+            LOGGER.warning(f"Connection timeout error {e} for {result['global_cache']}")
         except urllib3.exceptions.ReadTimeoutError as e:
             result['status'] = STATUS_FAILED
-            result['reason'] = f"Download timeout  error {e} for {result['global_cache']}"
+            result['reason'] = f"Download timeout  error for {result['global_cache']}, see logs"
             result['error_class'] = str(e.__class__.__name__)
+            LOGGER.warning(f"Download timeout error {e} for {result['global_cache']}")
         except urllib3.exceptions.MaxRetryError as e:
             result['status'] = STATUS_FAILED
             result['reason'] = f"Maximum retries downloading from {result['global_cache']} exceeded"
             result['error_class'] = str(e.__class__.__name__)
         except Exception as e:
             result['status'] = STATUS_FAILED
-            result['reason'] = f"Error {e} while downloading from {result['global_cache']}"
+            result['reason'] = f"Error while downloading from {result['global_cache']}, see logs"
             result['error_class'] = str(e.__class__.__name__)
+            LOGGER.warning(f"Error {e} while downloading from {result['global_cache']}")
 
         if result['status'] == STATUS_FAILED:
             final_status = result.get('status', STATUS_FAILED)
-            LOGGER.error(f"Download failed for {download_url}, reason: {result['reason']}")
+            LOGGER.warning(f"Download failed for {download_url}, reason: {result['reason']}")
             if lock_acquired:
                 redis_client.delete(lock_key)
             set_status(message_id, 'by-msg-id', final_status)
@@ -443,19 +417,32 @@ def download_from_wis2(self, job):
             result['status'] = STATUS_SKIPPED
             result['reason'] = f"Media type '{file_type}' not allowed by filter"
             result['error_class'] = "MediaTypeNotAllowed"
-            LOGGER.warning(f"File {output_path} skipped, media type '{file_type}' not allowed by filter")
+            LOGGER.debug(f"File {output_path} skipped, media type '{file_type}' not allowed by filter")
             return result
 
         # hash verification
-        hash_props = job['payload']['properties'].get('integrity',{})
+        hash_props = job.get('payload',{}).get('properties',{}).get('integrity',{})
         hash_method = hash_props.get('method','sha512')
         hash_expected = hash_props.get('value')
 
         if hash_method:
             sanitized_method = hash_method.replace('-', '_')
+            if sanitized_method not in ALLOWED_HASH_METHODS:
+                result['status'] = STATUS_SKIPPED
+                result['reason'] = f"Invalid hash method"
+                result['error_class'] = "InvalidHashMethod"
+                LOGGER.warning(
+                    f"File {output_path} skipped, invalid hash method '{sanitized_method}'")
+                return result
+
             hash_function = getattr(hash_module, sanitized_method, None)
             if not hash_function:
-                LOGGER.error(f"Invalid hash method '{hash_method}'")
+                result['status'] = STATUS_SKIPPED
+                result['reason'] = f"Hash method not found"
+                result['error_class'] = "InvalidHashMethod"
+                LOGGER.warning(
+                    f"File {output_path} skipped, hash method '{sanitized_method}' not found")
+                return result
             else:
                 hash_bytes = hash_function(data).digest()
                 hash_base64 = base64.b64encode(hash_bytes).decode()
@@ -465,14 +452,45 @@ def download_from_wis2(self, job):
                 if hash_expected:
                     result['valid_hash'] = (hash_base64 == hash_expected)
                     if not result['valid_hash']:
-                        LOGGER.error(f"Hash verification failed for {download_url}")
-                        result['status'] = STATUS_FAILED
+                        LOGGER.warning(f"Hash verification failed for {download_url}")
+                        result['status'] = STATUS_SKIPPED
                         result['reason'] = f"Hash verification failed for {download_url}"
                         result['error_class'] = "HashVerificationError"
                         return result
 
-        # now save the data
-        output_path.write_bytes(data)
+        # now save the data, first write to tmp file
+        tmp_path = None
+        try:
+            fh, tmp_path = tempfile.mkstemp(dir=target_directory,
+                                            prefix='.tmp_')
+            try:
+                os.write(fh, data)
+            finally:
+                os.close(fh)
+
+            if overwrite:
+                os.replace(tmp_path, output_path)
+            else:
+                try:
+                    os.link(tmp_path, output_path)
+                    Path(tmp_path).unlink(missing_ok=True)
+                except FileExistsError:
+                    Path(tmp_path).unlink(missing_ok=True)
+                    result['status'] = STATUS_SKIPPED
+                    result['reason'] = "File created by another process"
+                    result['error_class'] = "FileExistsError"
+                    LOGGER.debug(
+                        f"File {output_path} already exists (race condition), skipping")
+                    return result
+        except OSError as e:
+            if tmp_path:
+                Path(tmp_path).unlink(missing_ok=True)
+            result['status'] = STATUS_FAILED
+            result['reason'] = "Failed to write file, see logs"
+            result['error_class'] = str(e.__class__.__name__)
+            LOGGER.error(f"Failed to write {output_path}: {e}")
+            return result
+
         result['save'] = True
         result['status'] = STATUS_SUCCESS
 
@@ -482,7 +500,7 @@ def download_from_wis2(self, job):
     except Exception as e:
         LOGGER.error(f"Error processing job {message_id}: {e}", exc_info=True)
         result['status'] = STATUS_FAILED
-        result['reason'] = str(e)
+        result['reason'] = f"Error processing job {message_id}, see logs"
         result['error_class'] = str(e.__class__.__name__)
         return result
 
@@ -499,7 +517,7 @@ def download_from_wis2(self, job):
 @app.task
 def decode_and_ingest(result):
     if result.get('status') != STATUS_SUCCESS:
-        LOGGER.info(
+        LOGGER.debug(
             f"Skipping decode for job {result.get('id')} due to previous status: {result.get('status')}")
         return result
 

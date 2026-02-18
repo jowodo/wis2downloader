@@ -15,10 +15,14 @@ setup_logging()  # Configure root logger
 LOGGER = setup_logging(__name__)
 
 DATA_DIRECTORY = Path(
-    os.getenv("DATA_BASEPATH", "/data/wis2-downloads")).resolve()
+    os.getenv("DATA_BASEPATH", "/data")).resolve()
 
-FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
-FLASK_PORT = int(os.getenv("FLASK_PORT", 5001))
+try:
+    FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
+    FLASK_PORT = int(os.getenv("FLASK_PORT", 5001))
+except Exception as e:
+    LOGGER.error(f"Error getting flask host and port: {e}")
+    raise e
 
 def get_json() -> dict:
     """Get JSON body safely."""
@@ -51,9 +55,9 @@ def normalise_path(userpath: str) -> str | None:
 COMMAND_CHANNEL = "subscription_commands"
 
 # Now set up flask app
-FLASK_SECRET_KEY = os.getenv('FLASK_SECRET_KEY', 'dev')
-if FLASK_SECRET_KEY == 'dev':
-    LOGGER.warning("Using insecure secret key for flask app")
+FLASK_SECRET_KEY = os.getenv('FLASK_SECRET_KEY')
+if not FLASK_SECRET_KEY:
+    raise ValueError("FLASK_SECRET_KEY must be set")
 app = Flask(__name__, instance_relative_config=True)
 app.config.from_mapping(SECRET_KEY=FLASK_SECRET_KEY)
 
@@ -98,7 +102,7 @@ def persist_subscription(topic, save_path, filters):
 
 CELERY_DEFAULT_QUEUE = os.getenv("CELERY_DEFAULT_QUEUE", "celery")
 CELERY_QUEUE_LENGTH = Gauge(
-    'wis2_celery_queue_length',
+    'wis2downloader_celery_queue_length',
     'Current number of tasks in the Celery default queue.',
     ['queue_name'],
     multiprocess_mode='livesum'
@@ -279,4 +283,5 @@ def health_check():
 
 
 def run():
-    app.run(debug=True, host=FLASK_HOST, port=FLASK_PORT, use_reloader=False)
+    _debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
+    app.run(debug=_debug, host=FLASK_HOST, port=FLASK_PORT, use_reloader=False)

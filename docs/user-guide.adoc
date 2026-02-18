@@ -259,18 +259,20 @@ View download statistics:
 [source,bash]
 ----
 # Total downloads
-curl -s http://localhost:5002/metrics | grep wis2_downloads_total
+curl -s http://localhost:5002/metrics | grep wis2downloader_downloads_total
 
 # Failed downloads
-curl -s http://localhost:5002/metrics | grep wis2_downloads_failed
+curl -s http://localhost:5002/metrics | grep wis2downloader_failed_total
 
 # Queue depth
-curl -s http://localhost:5002/metrics | grep wis2_celery_queue_length
+curl -s http://localhost:5002/metrics | grep wis2downloader_celery_queue_length
 ----
 
 === Grafana Dashboard
 
-Access Grafana at `http://localhost:3000` (default credentials: admin/admin) for visual monitoring.
+Access Grafana at `http://localhost:3000` for visual monitoring.
+
+NOTE: Default credentials are admin/admin. You should change the password after first login.
 
 == Common Use Cases
 
@@ -366,7 +368,7 @@ Check the skip reason in metrics:
 
 [source,bash]
 ----
-curl -s http://localhost:5002/metrics | grep wis2_notifications_skipped
+curl -s http://localhost:5002/metrics | grep wis2downloader_skipped_total
 ----
 
 Common reasons:
