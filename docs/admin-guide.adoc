@@ -378,11 +378,10 @@ The system uses a single Redis instance for:
 * Deduplication tracking
 * Celery task queue and results
 
-For production deployments requiring high availability, consider:
+The system uses a single Redis instance and does not provide high availability. Regardless of scale, ensure Redis data is durable:
 
-* Using external managed Redis (AWS ElastiCache, Azure Cache for Redis)
-* Running Redis with persistence enabled (AOF + RDB)
-* Implementing regular backups
+* Enable Redis persistence (AOF + RDB)
+* Implement regular backups of the Redis dump
 
 === Scaling Workers
 
