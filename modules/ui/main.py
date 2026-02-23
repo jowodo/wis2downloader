@@ -39,7 +39,7 @@ def main_page(client: Client):
 
     def show_view(name):
         layout.content.clear()
-        layout.right_sidebar.set_visibility(False)
+        layout.right_sidebar.value = False
         layout.right_sidebar.clear()
         with layout.content:
             if name == 'dashboard':

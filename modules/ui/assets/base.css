@@ -2,22 +2,31 @@
 
 /* -- Layout ---------------------------------------------------- */
 
+#app {
+    max-width: 1500px !important;
+    margin: 0 auto;
+    transform: translateZ(0);
+}
+
 .nicegui-content {
     padding: 0 !important;
     overflow: hidden !important;
 }
 
-.right-sidebar {
-    flex-shrink: 0;
-    height: 100%;
-    overflow-y: auto;
-    box-sizing: border-box;
-    background-color: #f5f6fa;
-    box-shadow: -2px 0 8px rgba(31,38,135,0.06);
+.page-body-row {
+    width: 100%;
+    height: calc(100vh - 205px);
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
 }
 
-.right-sidebar {
-    width: 300px;
+.content-area {
+    flex: 1 1 auto;
+    margin-left: auto;
+    margin-right: auto;
+    overflow-y: auto;
+    width: 100% !important;
 }
 
 .card-map {
@@ -40,8 +49,7 @@
     box-shadow: none !important;
 }
 
-.header-banner,
-.header-divider {
+.header-banner {
     width: 100vw;
     display: block;
     margin: 0 !important;
@@ -83,10 +91,11 @@
     background: rgba(32, 106, 170, 0.95) !important;
     box-shadow: 0 -2px 12px 0 rgba(31, 38, 135, 0.10) !important;
     height: 30px;
+    width: 100%;
 }
 
 .footer-divider {
-    margin-top: -10px;
+    margin-top: -16px !important;
     height: 11px;
 }
 
@@ -226,7 +235,7 @@
 /* -- Search form ----------------------------------------------- */
 
 .search-form-card {
-    width: 100%;
+    width: 100% !important;
     max-width: 800px;
     margin-bottom: 16px !important;
 }
@@ -270,6 +279,7 @@
 
 .results-column {
     width: 100%;
+    max-width: 800px;
 }
 
 .page-selector {
@@ -278,7 +288,6 @@
 
 .result-card {
     width: 100%;
-    max-width: 800px;
 }
 
 .result-card-header {
@@ -347,9 +356,10 @@
 
 .grafana-frame {
     width: 100%;
-    height: calc(100vh - 215px); /* subtract header (~185px) + footer (30px) */
+    height: calc(100vh - 205px) !important; /* subtract header (~185px) + footer (30px) */
     border: none;
     display: block;
+    padding: 0px;
 }
 
 /* -- Form inputs ----------------------------------------------- */
