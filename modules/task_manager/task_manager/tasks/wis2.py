@@ -23,7 +23,7 @@ from shared import get_redis_client, apply_filters, MatchContext, incr_counter
 LOGGER = get_task_logger(__name__)
 
 DATA_BASEPATH = os.getenv("DATA_BASEPATH","/data") # this needs checking
-RETENTION_PERIOD_HOURS = int(os.environ.get('DOWNLOAD_RETENTION_PERIOD_HOURS', 30*24))  # noqa
+RETENTION_PERIOD_HOURS = int(os.environ.get('DOWNLOAD_RETENTION_PERIOD', 30)) * 24  # noqa
 
 STATUS_SUCCESS = "SUCCESS"
 STATUS_FAILED = "FAILED"
