@@ -1,12 +1,12 @@
-# Task Manager Module
+# Housekeep Manager Module
 
-Celery tasks for downloading and processing WIS2 data.
+Celery tasks for housekeeping and maintenance operations in the WIS2 system.
 
 ## Overview
 
 This module provides:
 - Celery worker configuration with Redis backend
-- Download tasks with deduplication, filtering, and hash verification
+- Housekeeping tasks for cleaning, archiving, and maintaining system state
 - Prometheus metrics for monitoring
 - Workflow chains for task orchestration
 
@@ -17,29 +17,36 @@ This module provides:
 
 ## Entry Points
 
-- `task_manager_start` - CLI entry point for starting Celery worker
+- `housekeep_manager_start` - CLI entry point for starting Celery worker
 
 ## Key Files
 
 | File | Description |
 |------|-------------|
-| `worker.py` | Celery app configuration |
-| `tasks/wis2.py` | Download and processing tasks |
+| `worker.py` | Celery app configuration and worker startup |
+| `tasks/housekeep.py` | Housekeeping and maintenance tasks |
 | `workflows/__init__.py` | Task chain definitions |
 
 ## Tasks
 
-### `download_from_wis2`
+### `housekeep_task`
 
-Downloads a file from WIS2 notification.
+Performs scheduled housekeeping operations such as cleaning up old data, archiving, and maintaining system health.
 
 Features:
-- Deduplication via message ID, data ID, and file hash
-- Distributed locking to prevent concurrent downloads
-- Media type filtering
-- Hash verification
+- Scheduled execution via Celery Beat
+- Distributed locking to prevent concurrent operations
+- Metrics collection for monitoring
+- Customizable task workflows
+
+### `archive_task`
+
+Handles archiving of files and data as part of housekeeping routines.
+
 - Automatic file organization by date
 
-### `decode_and_ingest`
+### `cleanup_task`
 
-Placeholder for post-download processing (decoding BUFR/GRIB, ingestion).
+Removes obsolete or unnecessary files and records to maintain system efficiency.
+
+Placeholder for additional post-housekeeping processing.
