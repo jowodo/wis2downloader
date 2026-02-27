@@ -4,10 +4,10 @@ import os
 import time
 import shutil
 
-from housekeep_manager.worker import app as app
+from task_manager.scheduler import app as app
 
 # Import shared utilities
-from shared import set_gauge
+from shared import set_gauge, incr_counter
 
 LOGGER = get_task_logger(__name__)
 
@@ -28,7 +28,9 @@ def check_disk_space():
     try:
         total, used, free = shutil.disk_usage(DATA_BASEPATH)
         percent_free = free / total * 100
-        set_gauge('free_space', {}, percent_free)
+        incr_counter('total_space', {}, total)
+        incr_counter('used_space', {}, used)
+        incr_counter('free_space', {}, free)
         LOGGER.debug(f"Disk usage for {DATA_BASEPATH}: {percent_free:.2f}% free")
         # You can set a threshold for warning, e.g., 20%
         if percent_free < 20:

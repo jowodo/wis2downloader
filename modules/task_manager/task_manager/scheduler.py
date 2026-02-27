@@ -1,8 +1,5 @@
 from celery import Celery
-from celery.bin import beat
 import os
-import sys
-import subprocess
 
 from shared.logging import setup_logging
 from shared.redis_client import (REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB)
@@ -25,6 +22,7 @@ app = Celery('tasks',
              broker=HOUSEKEEP_BROKER_URL,
              result_backend=HOUSEKEEP_RESULT_BACKEND)
 app.conf.worker_log_level = os.getenv("LOG_LEVEL", "DEBUG").upper()
+app.conf.CELERYBEAT_LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG").upper()
 app.conf.result_expires = 86400  # 1 day, or do we want 1 hour? (TBD)
 app.conf.update(
     task_serializer='json',
@@ -33,13 +31,4 @@ app.conf.update(
 )
 
 # Import your tasks
-app.autodiscover_tasks(['housekeep_manager.tasks','housekeep_manager.tasks.housekeep' ])
-
-def main():
-    # Start celery beat and worker
-    subprocess.run([
-        sys.executable, '-m', 'celery', '-A', 'housekeep_manager.worker', 'worker', '--loglevel=DEBUG', '-B'
-    ], check=True)
-
-if __name__ == '__main__':
-    main()
+app.autodiscover_tasks(['task_manager.tasks','task_manager.tasks.scheduled_tasks'])

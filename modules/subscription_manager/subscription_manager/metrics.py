@@ -14,5 +14,3 @@ FAILED_DOWNLOADS = Counter(
 TOPIC_STATUS = Gauge(
     'topic_subscription_status', 'Subscription status of a given topic',
     ['topic'])
-FREE_SPACE = Gauge(
-    'free_space', 'Percentage of free disk space')

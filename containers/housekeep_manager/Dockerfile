@@ -24,13 +24,13 @@ RUN python3.12 -m venv /home/wis2/.venv && \
     echo "" >> .bashrc
 
 COPY --chown=wis2:wis2 ./modules/ ./app
+COPY --chown=wis2:wis2  ./containers/housekeep_manager/start.sh ./app
 
 RUN cd ./app && \
     source /home/wis2/.venv/bin/activate && \
     pip install gunicorn gevent && \
     pip install -e shared && \
-    pip install -e housekeep_manager && \
-    pip install -e subscription_manager
+    pip install -e task_manager
 
 # now the default command
-CMD ["/bin/bash", "-c", "source .venv/bin/activate && housekeep_manager_start worker"]
+CMD ["/bin/bash", "-c", "source .venv/bin/activate && ./app/start.sh"]
