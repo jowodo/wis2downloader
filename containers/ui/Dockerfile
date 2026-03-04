@@ -1,4 +1,10 @@
-# Use the official NiceGUI image as the base image
+# Stage 1: build docs
+FROM asciidoctor/docker-asciidoctor:latest AS docs-builder
+WORKDIR /repo
+COPY docs/ ./docs/
+RUN chmod +x docs/build.sh && docs/build.sh site
+
+# Stage 2: runtime image
 FROM zauberzeug/nicegui:latest
 
 # Set working directory
@@ -9,6 +15,9 @@ COPY ./modules/ui /app
 
 # Copy local module to the container
 COPY ./modules/shared /app/shared
+
+# Bake in the built docs (after COPY ./modules/ui so it is not overwritten)
+COPY --from=docs-builder /repo/site /app/site
 
 # Install any additional dependencies if needed
 RUN uv pip install /app/shared

@@ -1,10 +1,15 @@
 import copy
 import json
+import re
 import httpx
 from nicegui import ui
 
+_DATE_RE = re.compile(r'^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$')
+_TIME_RE = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
+
 from config import SUBSCRIPTION_MANAGER
 from data import get_datasets_for_channel, merged_records
+from i18n import t
 
 from shared import setup_logging
 
@@ -35,25 +40,75 @@ def _centre_id(dataset_id: str) -> str:
     return parts[3] if len(parts) > 3 else ''
 
 
-def _collect_filters(dataset_select, media_type_select, north, west, east, south,
+def _collect_filters(dataset_select, media_type_select,
+                     north, south, east, west,
                      start_date, end_date, start_time, end_time,
-                     custom_inputs: dict) -> dict:
-    filters = {}
-    if dataset_select.value:
-        filters['dataset'] = dataset_select.value
+                     custom_inputs: dict, custom_filter_defs: dict) -> dict:
+    conditions = []
+
     if media_type_select.value:
-        filters['media_type'] = media_type_select.value
-    bbox = [north.value, west.value, east.value, south.value]
-    if all(v is not None for v in bbox):
-        filters['bbox'] = bbox
+        # Pre-download, media_type is unknown — pass through so the post-download
+        # check can evaluate it. Post-download, accept only if type is in the list.
+        conditions.append({"any": [
+            {"media_type": {"exists": False}},
+            {"media_type": {"in": list(media_type_select.value)}},
+        ]})
+
+    if dataset_select.value:
+        conditions.append({"metadata_id": {"in": list(dataset_select.value)}})
+
+    if all(v is not None for v in [north.value, south.value, east.value, west.value]):
+        conditions.append({"bbox": {
+            "north": north.value, "south": south.value,
+            "east": east.value,  "west": west.value,
+        }})
+
     if start_date.value and end_date.value:
-        filters['date_range'] = [start_date.value, end_date.value]
-    if start_time.value and end_time.value:
-        filters['time_range'] = [start_time.value, end_time.value]
-    custom = {name: inp.value for name, inp in custom_inputs.items() if inp.value is not None}
-    if custom:
-        filters['custom_filters'] = custom
-    return filters
+        if any(inp.error for inp in [start_date, end_date, start_time, end_time]):
+            ui.notify(t('validation.date_time_errors'), type='warning')
+            return None
+        start_t = start_time.value or '00:00'
+        end_t   = end_time.value   or '23:59'
+        conditions.append({
+            "property": "pubtime",
+            "type": "datetime",
+            "between": [
+                f"{start_date.value}T{start_t}:00+00:00",
+                f"{end_date.value}T{end_t}:59+00:00",
+            ],
+        })
+
+    for fname, inp in custom_inputs.items():
+        if inp.value is not None and inp.value != '':
+            ftype = custom_filter_defs.get(fname, {}).get('type', 'string')
+            if ftype == 'string':
+                values = [v.strip() for v in str(inp.value).split(',') if v.strip()]
+                conditions.append({"property": fname, "type": ftype, "in": values})
+            else:
+                conditions.append({"property": fname, "type": ftype, "equals": inp.value})
+
+    if not conditions:
+        return {}
+
+    match = {"all": conditions} if len(conditions) > 1 else conditions[0]
+
+    return {
+        "rules": [
+            {
+                "id": "accept",
+                "order": 1,
+                "match": match,
+                "action": "accept",
+            },
+            {
+                "id": "default",
+                "order": 999,
+                "match": {"always": True},
+                "action": "reject",
+                "reason": "No filter criteria matched",
+            },
+        ]
+    }
 
 
 def on_topics_picked(e, state, layout, is_page_selection=False, sender=None, dataset_id=None):
@@ -77,7 +132,7 @@ def on_topics_picked(e, state, layout, is_page_selection=False, sender=None, dat
         layout.right_sidebar.clear()
 
         # --- Selected topics ---
-        ui.label("Selected Topics").classes("sidebar-title")
+        ui.label(t('sidebar.selected_topics')).classes("sidebar-title")
         with ui.row().classes("selected-topics-row"):
             for topic in topics:
                 ui.label(topic).classes("selected-topic-chip")
@@ -86,13 +141,14 @@ def on_topics_picked(e, state, layout, is_page_selection=False, sender=None, dat
 
         # --- Save directory ---
         directory = ui.input(
-            label='Save directory', placeholder='./'
+            label=t('sidebar.save_directory'),
+            placeholder=t('sidebar.save_directory_hint'),
         ).classes("directory-input")
 
         ui.separator()
 
         # --- Filters ---
-        ui.label("Filters").classes("sidebar-section-title")
+        ui.label(t('sidebar.filters')).classes("sidebar-section-title")
 
         # Collect datasets for selected topics
         dataset_options: dict[str, str] = {}
@@ -110,7 +166,7 @@ def on_topics_picked(e, state, layout, is_page_selection=False, sender=None, dat
             # Catalogue path: single dataset locked to the one selected
             dataset_select = ui.select(
                 options={dataset_id: dataset_options[dataset_id]},
-                label='Dataset',
+                label=t('sidebar.dataset'),
                 multiple=True,
                 value=[dataset_id],
             ).classes("filter-input").props('disable')
@@ -118,10 +174,12 @@ def on_topics_picked(e, state, layout, is_page_selection=False, sender=None, dat
             with ui.row().classes("items-center gap-2"):
                 dataset_select = ui.select(
                     options=dataset_options,
-                    label='Datasets',
+                    label=t('sidebar.datasets'),
                     multiple=True,
                 ).classes("filter-input")
-                ui.button(icon="done_all").props("flat dense round").tooltip("Select / deselect all").on(
+                ui.button(icon="done_all").props("flat dense round").tooltip(
+                    t('btn.select_all')
+                ).on(
                     'click',
                     lambda: dataset_select.set_value(
                         list(dataset_options.keys())
@@ -132,27 +190,45 @@ def on_topics_picked(e, state, layout, is_page_selection=False, sender=None, dat
 
         media_type = ui.select(
             options=DEFAULT_ACCEPTED_MEDIA_TYPES,
-            label='Media types',
+            label=t('sidebar.media_types'),
             multiple=True,
         ).classes("filter-input")
 
-        with ui.expansion("Bounding box", icon="crop_square").classes("filter-expansion"):
+        # --- Bounding box ---
+        with ui.expansion(t('sidebar.bbox'), icon="crop_square").classes("filter-expansion"):
             with ui.grid(columns=2).classes("bbox-grid"):
-                north = ui.number(label='North', max=90,  min=-90).classes("bbox-input")
-                east  = ui.number(label='East',  max=180, min=-180).classes("bbox-input")
-                south = ui.number(label='South', max=90,  min=-90).classes("bbox-input")
-                west  = ui.number(label='West',  max=180, min=-180).classes("bbox-input")
+                north = ui.number(label=t('sidebar.north'), min=-90,  max=90).classes("bbox-input")
+                east  = ui.number(label=t('sidebar.east'),  min=-180, max=180).classes("bbox-input")
+                south = ui.number(label=t('sidebar.south'), min=-90,  max=90).classes("bbox-input")
+                west  = ui.number(label=t('sidebar.west'),  min=-180, max=180).classes("bbox-input")
 
-        with ui.expansion("Date & time range", icon="date_range").classes("filter-expansion"):
-            start_date = ui.input(label='Start date', placeholder='YYYY-MM-DD').classes("filter-input")
-            end_date   = ui.input(label='End date',   placeholder='YYYY-MM-DD').classes("filter-input")
-            start_time = ui.input(label='Start time', placeholder='HH:MM').classes("filter-input")
-            end_time   = ui.input(label='End time',   placeholder='HH:MM').classes("filter-input")
+        # --- Date & time range ---
+        with ui.expansion(t('sidebar.date_range'), icon="date_range").classes("filter-expansion"):
+            start_date = ui.input(
+                label=t('sidebar.start_date'),
+                placeholder=t('sidebar.start_date_hint'),
+                validation=lambda v: None if not v or _DATE_RE.match(v) else t('validation.date_format'),
+            ).classes("filter-input")
+            end_date = ui.input(
+                label=t('sidebar.end_date'),
+                placeholder=t('sidebar.start_date_hint'),
+                validation=lambda v: None if not v or _DATE_RE.match(v) else t('validation.date_format'),
+            ).classes("filter-input")
+            start_time = ui.input(
+                label=t('sidebar.start_time'),
+                placeholder=t('sidebar.time_hint'),
+                validation=lambda v: None if not v or _TIME_RE.match(v) else t('validation.time_format'),
+            ).classes("filter-input")
+            end_time = ui.input(
+                label=t('sidebar.end_time'),
+                placeholder=t('sidebar.time_hint'),
+                validation=lambda v: None if not v or _TIME_RE.match(v) else t('validation.time_format'),
+            ).classes("filter-input")
 
         # --- Custom filters from MQTT link metadata (catalogue only) ---
         custom_inputs: dict[str, ui.element] = {}
+        custom_filter_defs: dict[str, dict] = {}
         if is_page_selection:
-            custom_filter_defs: dict[str, dict] = {}
             for topic in topics:
                 channel_key = topic.replace("/#", "")
                 for dataset in get_datasets_for_channel(topic):
@@ -162,7 +238,7 @@ def on_topics_picked(e, state, layout, is_page_selection=False, sender=None, dat
                                 custom_filter_defs.setdefault(fname, fdef)
 
             if custom_filter_defs:
-                with ui.expansion("Custom filters", icon="tune").classes("filter-expansion"):
+                with ui.expansion(t('sidebar.custom_filters'), icon="tune").classes("filter-expansion"):
                     for fname, fdef in custom_filter_defs.items():
                         title = fdef.get('title', fname)
                         description = fdef.get('description', '')
@@ -170,28 +246,31 @@ def on_topics_picked(e, state, layout, is_page_selection=False, sender=None, dat
                         if ftype in ('integer', 'number'):
                             inp = ui.number(label=title).classes("filter-input")
                         else:
-                            inp = ui.input(label=title).classes("filter-input")
+                            inp = ui.input(label=title, placeholder='value1, value2, ...').classes("filter-input")
                         if description:
                             inp.tooltip(description)
                         custom_inputs[fname] = inp
 
         ui.separator()
 
-        ui.button("Subscribe", icon="check_circle").classes("subscribe-btn").on(
+        ui.button(t('btn.subscribe'), icon="check_circle").classes("subscribe-btn").on(
             'click',
             lambda: confirm_subscribe(
                 topics,
                 directory.value,
                 _collect_filters(
-                    dataset_select, media_type, north, west, east, south,
+                    dataset_select, media_type,
+                    north, south, east, west,
                     start_date, end_date, start_time, end_time,
-                    custom_inputs,
+                    custom_inputs, custom_filter_defs,
                 ),
             ),
         )
 
 
 def confirm_subscribe(topics, directory, filters):
+    if filters is None:
+        return  # validation errors already shown inline
     target = directory.strip() or './'
     payloads = [
         {"topic": topic, "target": target, "filter": filters}
@@ -200,17 +279,17 @@ def confirm_subscribe(topics, directory, filters):
     pretty = json.dumps(payloads if len(payloads) > 1 else payloads[0], indent=2)
 
     with ui.dialog() as dialog, ui.card().classes("dialog-confirm"):
-        ui.label("Confirm Subscription").classes("sidebar-title")
+        ui.label(t('dialog.confirm_title')).classes("sidebar-title")
         with ui.scroll_area():
             ui.code(pretty, language='json').classes("w-full")
         with ui.row().classes("justify-end gap-2"):
-            ui.button("Cancel", icon="close").props("flat").on('click', dialog.close)
+            ui.button(t('btn.cancel'), icon="close").props("flat").on('click', dialog.close)
 
             async def on_confirm():
                 dialog.close()
                 await subscribe_to_topics(topics, target, filters)
 
-            ui.button("Confirm", icon="check_circle").props("color=primary").on('click', on_confirm)
+            ui.button(t('btn.confirm'), icon="check_circle").props("color=primary").on('click', on_confirm)
     dialog.open()
 
 
@@ -234,13 +313,13 @@ async def show_metadata(dataset_id):
         with ui.scroll_area().classes("dialog-scroll"):
             if dataset is None:
                 LOGGER.error(f"Metadata not found for: {dataset_id}")
-                ui.label(f"Metadata not available for: {dataset_id}").classes("result-label")
+                ui.label(t('metadata.not_available', id=dataset_id)).classes("result-label")
             else:
-                ui.label(f"ID: {dataset.id}").classes("result-label")
-                ui.label(f"Title: {dataset.title or 'N/A'}").classes("result-label")
-                ui.label(f"Description: {dataset.description or 'N/A'}").classes("result-description")
+                ui.label(t('metadata.id', id=dataset.id)).classes("result-label")
+                ui.label(t('metadata.title', title=dataset.title or 'N/A')).classes("result-label")
+                ui.label(t('metadata.description', description=dataset.description or 'N/A')).classes("result-description")
                 with ui.row():
-                    ui.label("Keywords:").classes("result-label")
+                    ui.label(t('metadata.keywords')).classes("result-label")
                     for keyword in dataset.keywords:
                         ui.button(keyword).classes("keyword-btn")
                 if dataset.geometry:
@@ -252,5 +331,5 @@ async def show_metadata(dataset_id):
                     map_widget.on('init', lambda ev: map_widget.run_map_method(
                         'fitBounds', [coordinates[0][0], coordinates[0][2]]
                     ))
-        ui.button("Close").on('click', lambda: dialog.close())
+        ui.button(t('btn.close')).on('click', lambda: dialog.close())
     dialog.open()

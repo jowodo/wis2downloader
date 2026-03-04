@@ -3,13 +3,12 @@
 /* -- Layout ---------------------------------------------------- */
 
 #app {
-    max-width: 1500px !important;
     margin: 0 auto;
     transform: translateZ(0);
 }
 
 .nicegui-content {
-    padding: 0 !important;
+    padding: 0rem !important;
     overflow: hidden !important;
 }
 
@@ -19,6 +18,7 @@
     display: flex;
     flex-direction: row;
     overflow: hidden;
+    padding-left: 1rem !important;
 }
 
 .content-area {
@@ -211,7 +211,6 @@
 
 .settings-card {
     width: 100%;
-    max-width: 600px;
     margin-bottom: 16px !important;
 }
 
@@ -349,14 +348,15 @@
 
 .q-drawer--mini {
     overflow: hidden !important;
-    width: 60px !important;
+    width: calc(32px + 2rem) !important;
 }
+
 
 /* -- Grafana iframe -------------------------------------------- */
 
 .grafana-frame {
     width: 100%;
-    height: calc(100vh - 205px) !important; /* subtract header (~185px) + footer (30px) */
+    height: calc(100vh - 205px - 2rem) !important; /* subtract header (~185px) + footer (30px) */
     border: none;
     display: block;
     padding: 0px;
@@ -438,10 +438,82 @@ label, .q-label {
     font-size: 12px;
 }
 
+/* -- Manual subscription view ---------------------------------- */
+
+.manual-sub-card {
+    width: 100%;
+    margin-bottom: 16px !important;
+}
+
+.manual-sub-card .q-card__section {
+    width: 100%;
+}
+
+.filter-textarea {
+    width: 100% !important;
+}
+
+.filter-textarea textarea {
+    font-family: monospace !important;
+    font-size: 0.85rem !important;
+    min-height: 200px;
+}
+
 .q-dialog {
     border-radius: 18px !important;
     background: rgba(255,255,255,0.95) !important;
     box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.18) !important;
 }
+
+/* -- Focus indicators (WCAG 2.1 AA) -------------------------------- */
+
+:focus-visible {
+    outline: 2px solid #2563eb !important;
+    outline-offset: 2px !important;
+}
+
+.q-btn:focus-visible {
+    outline: 2px solid #2563eb !important;
+    outline-offset: 2px !important;
+}
+
+/* -- Language selector in header ----------------------------------- */
+
+.lang-select {
+    min-width: 100px;
+    color: #fff !important;
+}
+
+.lang-select .q-field__native,
+.lang-select .q-field__label {
+    color: #fff !important;
+}
+
+/* -- Docs iframe ----------------------------------------------- */
+
+.docs-frame {
+    width: calc(100% - 32px - 2rem);
+    height: calc(100vh - 205px - 2rem);
+    border: none;
+    display: block;
+    padding: 0;
+}
+
+/* -- RTL overrides ------------------------------------------------- */
+[dir="rtl"]:has(.q-drawer--left.q-drawer--mini) .q-page-container {
+    padding-left: 0 !important;
+    padding-right: calc(32px + 2rem) !important;
+}
+
+[dir="rtl"]:has(.q-drawer--left:not(.q-drawer--mini)) .q-page-container {
+    padding-left: 0 !important;
+    padding-right: 250px !important;
+}
+
+[dir="rtl"] .page-body-row {
+    padding-left: 0 !important;
+    padding-right: 1rem !important;
+}
+
 
 }
