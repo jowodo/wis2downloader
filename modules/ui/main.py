@@ -54,7 +54,7 @@ def main_page(client: Client):
         state.current_view = name
         layout.content.clear()
         if layout.right_sidebar:
-            layout.right_sidebar.set_visibility(False)
+            layout.right_sidebar.props('width=350').set_visibility(False)
             layout.right_sidebar.clear()
         with layout.content:
             if name in _GDC_VIEWS and not data_module.is_ready():
@@ -63,6 +63,7 @@ def main_page(client: Client):
                 ui.timer(0.5, lambda: show_view(name) if data_module.is_ready() else None)
                 return
             if name == 'dashboard':
+                layout.right_sidebar.props('width=0')
                 dashboard.render(layout.content)
             elif name == 'catalogue':
                 layout.right_sidebar.set_visibility(True)
