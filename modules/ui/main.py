@@ -54,7 +54,7 @@ def main_page(client: Client):
         state.current_view = name
         layout.content.clear()
         if layout.right_sidebar:
-            layout.right_sidebar.props('width=0').set_visibility(False)
+            layout.right_sidebar.value = False
             layout.right_sidebar.clear()
         with layout.content:
             if name in _GDC_VIEWS and not data_module.is_ready():
@@ -65,10 +65,8 @@ def main_page(client: Client):
             if name == 'dashboard':
                 dashboard.render(layout.content)
             elif name == 'catalogue':
-                layout.right_sidebar.props('width=350').set_visibility(True)
                 catalogue.render(layout.content, state, layout)
             elif name == 'tree':
-                layout.right_sidebar.props('width=350').set_visibility(True)
                 tree.render(layout.content, state, layout)
             elif name == 'manual':
                 manual_subscription.render(layout.content)
