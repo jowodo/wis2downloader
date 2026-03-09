@@ -580,7 +580,7 @@ WARNING: 这些操作是破坏性的。
 [source,bash]
 ----
 # Clear all subscriptions
-docker exec redis redis-cli -a $REDIS_PASSWORD DEL global:all_subscriptions
+docker exec redis redis-cli -a $REDIS_PASSWORD DEL global:subscriptions
 
 # Clear deduplication cache (allows re-download of all data)
 docker exec redis redis-cli -a $REDIS_PASSWORD KEYS "wis2:notifications:*" | xargs -r docker exec -i redis redis-cli -a $REDIS_PASSWORD DEL

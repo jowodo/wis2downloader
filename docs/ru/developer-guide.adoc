@@ -285,10 +285,9 @@ def add_subscription():
 ----
 @app.route('/metrics')
 def expose_metrics():
-    # Collect from multiprocess directory
-    registry = CollectorRegistry()
-    multiprocess.MultiProcessCollector(registry, path=basedir)
-    return Response(generate_latest(registry), mimetype="text/plain")
+    from shared.redis_metrics import generate_prometheus_text, set_gauge
+    set_gauge('celery_queue_length', {}, get_queue_length())
+    return Response(generate_prometheus_text(), mimetype='text/plain')
 ----
 
 === Модуль Task Manager
@@ -870,8 +869,8 @@ job = {
 |===
 |Шаблон ключа |Назначение
 
-|`global:all_subscriptions`
-|Хэш всех подписок (тема → JSON)
+|`global:subscriptions`
+|Хэш активных подписок (sub_id → JSON)
 
 |`wis2:notifications:data:tracker:by-msg-id:{id}`
 |Дедупликация по ID сообщения
@@ -928,18 +927,29 @@ def my_custom_task(data):
 
 === Добавление новой метрики
 
+1. Add an entry to `METRICS` in `modules/shared/shared/redis_metrics.py`:
++
 [source,python]
 ----
-from prometheus_client import Counter
+# short name → (prometheus type, help text)
+METRICS: dict[str, tuple[str, str]] = {
+    ...
+    'my_counter_total': ('counter', 'Description of the counter.'),
+    'my_gauge':         ('gauge',   'Description of the gauge.'),
+}
+----
 
-MY_METRIC = Counter(
-    'wis2_my_metric',
-    'Description of the metric',
-    ['label1', 'label2']
-)
+2. Increment or set it from any service:
++
+[source,python]
+----
+from shared import incr_counter, set_gauge
 
-# In task:
-MY_METRIC.labels(label1='value', label2='value').inc()
+# Counter (e.g. in a Celery task)
+incr_counter('my_counter_total', {'label1': 'value', 'label2': 'value'})
+
+# Gauge (e.g. in a scheduled task)
+set_gauge('my_gauge', {'label1': 'value'}, 42.0)
 ----
 
 == Тестирование
@@ -1051,7 +1061,7 @@ docker exec -it wis2downloader-refactor-celery-1 \
 docker exec -it redis redis-cli -a $REDIS_PASSWORD
 
 # List subscriptions
-HGETALL global:all_subscriptions
+HGETALL global:subscriptions
 
 # Check queue length
 LLEN celery
