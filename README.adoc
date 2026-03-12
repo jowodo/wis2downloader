@@ -59,12 +59,20 @@ WIS2 Downloader subscribes to MQTT topics on WIS2 Global Brokers, receives notif
 
 == Quick Start
 
+Download the https://github.com/World-Meteorological-Organization/wis2downloader/releases/latest[latest release] and extract it:
+
 [source,bash]
 ----
-# Clone and configure
-git clone https://github.com/World-Meteorological-Organization/wis2downloader.git
-cd wis2downloader
-cp default.env .env  # Customize if needed
+curl -L https://github.com/World-Meteorological-Organization/wis2downloader/archive/refs/tags/v1.0.0-beta1.tar.gz | tar -xz
+cd wis2downloader-1.0.0-beta1
+----
+
+Then configure and start:
+
+[source,bash]
+----
+# Configure (optional - defaults work out of the box)
+cp default.env .env
 
 # Set up downloads directory permissions (containers run as UID 10001)
 # Note - this is only required when run on a Linux workstation/server.
@@ -87,24 +95,28 @@ curl -X POST http://localhost:5002/subscriptions \
 ls -la downloads/surface-obs/
 ----
 
-NOTE: The containers run as a non-root user (UID 10001, GID 988). If you encounter permission errors writing to the downloads directory, see link:docs/admin-guide.adoc#_volume_permissions[Volume Permissions] in the Admin Guide for alternative approaches including ACLs.
+NOTE: The containers run as a non-root user (UID 10001, GID 988). If you encounter permission errors writing to the downloads directory, see the https://world-meteorological-organization.github.io/wis2downloader/en/admin-guide.html#_volume_permissions[Admin Guide] for alternative approaches including ACLs.
+
+TIP: To follow the latest development version instead, use `git clone https://github.com/World-Meteorological-Organization/wis2downloader.git`.
 
 == Documentation
+
+Full documentation is available at https://world-meteorological-organization.github.io/wis2downloader/[world-meteorological-organization.github.io/wis2downloader] in English, French, Spanish, Arabic, Chinese, and Russian.
 
 [cols="1,3"]
 |===
 |Document |Description
 
-|link:docs/admin-guide.adoc[Admin Guide]
+|https://world-meteorological-organization.github.io/wis2downloader/en/admin-guide.html[Admin Guide]
 |Deployment, configuration, environment variables, monitoring
 
-|link:docs/user-guide.adoc[User Guide]
+|https://world-meteorological-organization.github.io/wis2downloader/en/user-guide.html[User Guide]
 |Creating subscriptions, filtering, viewing downloads
 
-|link:docs/api-reference.adoc[API Reference]
+|https://world-meteorological-organization.github.io/wis2downloader/en/api-reference.html[API Reference]
 |REST API documentation (also available via Swagger UI at `/swagger`)
 
-|link:docs/developer-guide.adoc[Developer Guide]
+|https://world-meteorological-organization.github.io/wis2downloader/en/developer-guide.html[Developer Guide]
 |Architecture, module documentation, extending the system
 |===
 
@@ -137,15 +149,15 @@ NOTE: The containers run as a non-root user (UID 10001, GID 988). If you encount
 
 == Configuration
 
-Key environment variables (see link:docs/admin-guide.adoc[Admin Guide] for complete list):
+Key environment variables (see https://world-meteorological-organization.github.io/wis2downloader/en/admin-guide.html[Admin Guide] for complete list):
 
 [cols="2,1,3"]
 |===
 |Variable |Default |Description
 
 |`GLOBAL_BROKER_HOST`
-|-
-|WIS2 Global Broker hostname (required)
+|See `docker-compose.yaml`
+|WIS2 Global Broker hostname (two brokers pre-configured)
 
 |`DATA_PATH`
 |`/data`
