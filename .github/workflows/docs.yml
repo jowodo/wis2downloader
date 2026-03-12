@@ -30,7 +30,6 @@ jobs:
         uses: actions/checkout@v6.0.2
         with:
           ref: gh-pages
-          create-branch: true
           path: gh-pages
 
       - name: Copy files
