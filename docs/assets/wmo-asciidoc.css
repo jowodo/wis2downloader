@@ -36,7 +36,7 @@ h1, h2, h3, h4, h5, h6,
   content: "";
   display: block;
   height: 72px;
-  background: url("assets/wmo-logo-en.png") no-repeat left center;
+  background: url("../wmo-logo-en.png") no-repeat left center;
   background-size: contain;
 }
 
