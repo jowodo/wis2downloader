@@ -176,7 +176,6 @@ services:
     ports:
       - "5002:5001"
     volumes:
-      - "${HOST_DATA_PATH}:${CONTAINER_DATA_PATH}"
       - "./:/local/app"
       - "./config/subscription_manager/:/app/config/"
     env_file: *default-env
