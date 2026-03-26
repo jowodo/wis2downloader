@@ -14,8 +14,8 @@ info:
     name: WIS2 Downloader
 
 servers:
-  - url: http://localhost:5002
-    description: Local development server
+  - url: /api
+    description: Default server (via Traefik)
 
 tags:
   - name: Subscriptions
