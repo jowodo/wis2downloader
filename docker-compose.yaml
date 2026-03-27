@@ -9,7 +9,7 @@ x-logging: &default-logging
 x-logging-loki: &loki-logging
   driver: loki
   options:
-    loki-url: "http://host.docker.internal:3100/loki/api/v1/push"
+    loki-url: "http://host.docker.internal/loki/loki/api/v1/push"
     loki-retries: "5"
     mode: "non-blocking"
     max-buffer-size: "16m"
@@ -19,11 +19,29 @@ x-logging-loki: &loki-logging
 
 
 services:
+  traefik:
+    container_name: traefik
+    image: traefik:v3.6.6
+    restart: always
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=redis-net"
+      - "--entrypoints.web.address=:80"
+      - "--log.level=DEBUG"
+      - "--accesslog=true"
+    ports:
+      - "80:80"
+      - "8090:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - redis-net
+    logging: *default-logging
+
   loki:
     container_name: loki
     image: grafana/loki:3.6.7
-    ports:
-      - "3100:3100"
     restart: always
     command:
       - -config.file=/etc/loki/loki-config.yml
@@ -33,6 +51,14 @@ services:
     networks:
       - redis-net
     logging: *default-logging
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.loki.rule=PathPrefix(`/loki`)"
+      - "traefik.http.routers.loki.entrypoints=web"
+      - "traefik.http.routers.loki.priority=10"
+      - "traefik.http.middlewares.loki-strip.stripprefix.prefixes=/loki"
+      - "traefik.http.routers.loki.middlewares=loki-strip"
+      - "traefik.http.services.loki.loadbalancer.server.port=3100"
 
 
   prometheus:
@@ -49,13 +75,19 @@ services:
     networks:
       - redis-net
     logging: *loki-logging
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prometheus.rule=PathPrefix(`/prometheus`)"
+      - "traefik.http.routers.prometheus.entrypoints=web"
+      - "traefik.http.routers.prometheus.priority=10"
+      - "traefik.http.middlewares.prometheus-strip.stripprefix.prefixes=/prometheus"
+      - "traefik.http.routers.prometheus.middlewares=prometheus-strip"
+      - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
 
   grafana:
     container_name: grafana
     image: grafana/grafana:12.4.1
     restart: always
-    ports:
-      - "3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./config/grafana/provisioning:/etc/grafana/provisioning
@@ -67,12 +99,20 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
       - GF_LOG_FILTERS=auth.client.session:error,tsdb.loki:warn,sqlstore.transactions:warn
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
     depends_on:
       - prometheus
       - loki
     networks:
       - redis-net
     logging: *loki-logging
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=PathPrefix(`/grafana`)"
+      - "traefik.http.routers.grafana.entrypoints=web"
+      - "traefik.http.routers.grafana.priority=10"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
 
   # Databases / message queues
 
@@ -170,8 +210,6 @@ services:
     build:
       context: .
       dockerfile: ./containers/subscription_manager/Dockerfile
-    ports:
-      - "5002:5001"
     env_file: *default-env
     environment:
       - FLASK_HOST=0.0.0.0
@@ -182,22 +220,35 @@ services:
     networks:
       - redis-net
     logging: *loki-logging
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
-      interval: 30s
-      timeout: 10s
-      start_period: 5s
-      retries: 3
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wis2api.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.wis2api.entrypoints=web"
+      - "traefik.http.routers.wis2api.priority=10"
+      - "traefik.http.routers.wis2api.service=wis2api"
+      - "traefik.http.middlewares.api-strip.stripprefix.prefixes=/api"
+      - "traefik.http.routers.wis2api.middlewares=api-strip"
+      - "traefik.http.services.wis2api.loadbalancer.server.port=5001"
 
   wis2downloader-ui:
       build:
         context: .
         dockerfile: ./containers/ui/Dockerfile
       env_file: *default-env
-      ports:
-        - 8080:8080
+      environment:
+        - WIS2DOWNLOADER_SUBSCRIPTION_MANAGER_URL=http://subscription-manager:5001
+        - WIS2DOWNLOADER_GRAFANA_URL=${WIS2DOWNLOADER_BASE_URL}/grafana
+      depends_on:
+        - traefik
+        - subscription-manager
       networks:
       - redis-net
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.ui.rule=PathPrefix(`/`)"
+        - "traefik.http.routers.ui.entrypoints=web"
+        - "traefik.http.routers.ui.priority=1"
+        - "traefik.http.services.ui.loadbalancer.server.port=8080"
 
   subscriber-france:
     container_name: subscriber-france
